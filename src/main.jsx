@@ -1843,6 +1843,9 @@ function PreviewPanel({ tabs, activeKey, onChange }) {
     setQuery("");
     setFilters({});
     setExpanded(false);
+    if (active) {
+      setPrintSettings(getA4PreviewSettings(active.label, (active.rows?.[0] && Object.keys(active.rows[0]).filter((column) => !column.startsWith("__")).length) || 0, active.rows?.length || 0));
+    }
   }, [activeKey]);
   const activeRows = active?.rows || [];
   const columns = activeRows.length ? Object.keys(activeRows[0]) : [];
@@ -1851,7 +1854,7 @@ function PreviewPanel({ tabs, activeKey, onChange }) {
   if (!active) return null;
   const rows = expanded || showAll ? filteredRows : filteredRows.slice(0, 80);
   const displayColumns = rows.length ? Object.keys(rows[0]).filter((column) => !column.startsWith("__")) : columns.filter((column) => !column.startsWith("__"));
-  const applyA4Fit = () => setPrintSettings(getA4PreviewSettings(displayColumns.length, filteredRows.length));
+  const applyA4Fit = () => setPrintSettings(getA4PreviewSettings(active.label, displayColumns.length, filteredRows.length));
   return (
     <div
       className={`preview-panel ${expanded ? "excel-mode" : ""}`}
@@ -1889,10 +1892,10 @@ function PreviewPanel({ tabs, activeKey, onChange }) {
         <label className="table-filter compact-control">
           方向
           <select value={printSettings.orientation} onChange={(event) => setPrintSettings((current) => ({ ...current, orientation: event.target.value }))}>
-            <option value="landscape">横向</option>
-            <option value="portrait">纵向</option>
-          </select>
-        </label>
+              <option value="landscape">横向</option>
+              <option value="portrait">纵向</option>
+            </select>
+          </label>
         <label className="table-filter compact-control">
           字号
           <input type="number" min="8" max="16" value={printSettings.fontSize} onChange={(event) => setPrintSettings((current) => ({ ...current, fontSize: Number(event.target.value) || current.fontSize }))} />
@@ -1947,14 +1950,26 @@ function PreviewPanel({ tabs, activeKey, onChange }) {
   );
 }
 
-function getA4PreviewSettings(columnCount, rowCount) {
-  const wide = columnCount >= 10;
-  const dense = rowCount > 45;
+function getA4PreviewSettings(label, columnCount, rowCount) {
+  const isRoom = String(label || "").includes("考场信息");
+  const isClass = String(label || "").includes("班主任");
+  const isTime = String(label || "").includes("考试时间");
+  const isDoor = String(label || "").includes("门牌");
+  const wide = columnCount >= 9 || isClass || isDoor;
+  const dense = rowCount > 42 || isRoom;
+  if (isTime) {
+    return {
+      orientation: "portrait",
+      fontSize: 18,
+      rowHeight: 46,
+      zoom: 100,
+    };
+  }
   return {
     orientation: wide ? "landscape" : "portrait",
-    fontSize: wide || dense ? 9 : 11,
-    rowHeight: dense ? 18 : 22,
-    zoom: wide ? 82 : 92,
+    fontSize: dense ? 9 : wide ? 10 : 11,
+    rowHeight: dense ? 16 : 20,
+    zoom: isRoom ? 88 : wide ? 86 : 94,
   };
 }
 
@@ -2001,19 +2016,24 @@ function buildDoorRowsForPreview(schedule, rooms) {
     const main = schedule.mainAssignments.filter((item) => item.roomNo === room.roomNo);
     const foreign = schedule.foreignAssignments.filter((item) => item.roomNo === room.roomNo);
     const elective = schedule.electiveAssignments.filter((item) => item.roomNo === room.roomNo);
-    const countSubject = (subject) => schedule.subjectAssignments.filter((item) => item.roomNo === room.roomNo && item.subjectLabel === subject).length;
+    const subjectRows = (subject) => schedule.subjectAssignments.filter((item) => item.roomNo === room.roomNo && item.subjectLabel === subject);
+    const isSelfStudySubjectRoom = (subject) => subjectRows(subject).some((item) => item.status === "自习");
     return {
       门牌号: room.doorNo,
       教室: room.roomName,
       考场号: room.roomNo,
       语数物历: main.length || "",
       外语: foreign.length || "",
-      化学: countSubject("化学") || "",
-      地理: countSubject("地理") || "",
-      政治: countSubject("政治") || "",
-      生物: countSubject("生物") || "",
+      化学: subjectRows("化学").length || "",
+      地理: subjectRows("地理").length || "",
+      政治: subjectRows("政治").length || "",
+      生物: subjectRows("生物").length || "",
       四选二: elective.length || "",
       人数: room.capacity,
+      "__selfStudy:化学": isSelfStudySubjectRoom("化学"),
+      "__selfStudy:地理": isSelfStudySubjectRoom("地理"),
+      "__selfStudy:政治": isSelfStudySubjectRoom("政治"),
+      "__selfStudy:生物": isSelfStudySubjectRoom("生物"),
     };
   }).filter((row) => row.语数物历 || row.外语 || row.化学 || row.地理 || row.政治 || row.生物 || row.四选二);
 }

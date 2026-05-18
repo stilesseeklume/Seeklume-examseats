@@ -1006,7 +1006,7 @@ async function patchWorkbookData(arrayBuffer, workbook) {
     const file = zip.file(path);
     if (!file) continue;
     const xml = await file.async("string");
-    zip.file(path, injectPageSetup(xml, settings));
+    zip.file(path, injectPageSetup(xml, { ...settings, margins: sheet?.["!margins"], printOptions: sheet?.["!printOptions"] }));
   }
   const patched = await zip.generateAsync({ type: "uint8array" });
   return patched;
@@ -1018,6 +1018,9 @@ function injectPageSetup(xml, settings = {}) {
   const scale = settings.scale ?? undefined;
   const orientation = settings.orientation || "portrait";
   const pageSetup = `<pageSetup paperSize="${settings.paperSize || 9}" orientation="${orientation}" fitToWidth="${fitToWidth}" fitToHeight="${fitToHeight}"${scale ? ` scale="${scale}"` : ""}/>`;
+  const margins = settings.margins || {};
+  const pageMargins = `<pageMargins left="${margins.left ?? 0.25}" right="${margins.right ?? 0.25}" top="${margins.top ?? 0.35}" bottom="${margins.bottom ?? 0.35}" header="${margins.header ?? 0.1}" footer="${margins.footer ?? 0.1}"/>`;
+  const printOptions = settings.printOptions?.horizontalCentered ? `<printOptions horizontalCentered="1" verticalCentered="${settings.printOptions?.verticalCentered ? 1 : 0}"/>` : "";
   const sheetPr = `<sheetPr><pageSetUpPr fitToPage="1"/></sheetPr>`;
   let next = xml;
   if (!next.includes("<sheetPr")) {
@@ -1031,6 +1034,14 @@ function injectPageSetup(xml, settings = {}) {
     next = next.replace(/<pageMargins[^>]*\/>/, (match) => `${pageSetup}${match}`);
   } else {
     next = next.replace(/<\/worksheet>$/, `${pageSetup}</worksheet>`);
+  }
+  if (next.includes("<pageMargins")) {
+    next = next.replace(/<pageMargins[^>]*\/>/, pageMargins);
+  } else {
+    next = next.replace(/<pageSetup[^>]*\/>/, (match) => `${match}${pageMargins}`);
+  }
+  if (printOptions && !next.includes("<printOptions")) {
+    next = next.replace(/<pageMargins[^>]*\/>/, (match) => `${printOptions}${match}`);
   }
   return next;
 }
@@ -1069,7 +1080,7 @@ export function buildWorkbook({ schedule, rooms, selected = {}, group = EXPORT_G
     if (enabled.roomSummary) appendSheet(workbook, "考场汇总", buildRoomSummaryRows(schedule, rooms), { orientation: "portrait" });
   }
   if ((group === EXPORT_GROUPS.ALL && enabled.timeSheet !== false) || group === EXPORT_GROUPS.TIME) {
-    appendSheet(workbook, "考试时间", buildTimeSheetRows(schedule.examTimes || []), { orientation: "portrait", profile: "print" });
+    appendSheet(workbook, "考试时间", buildTimeSheetRows(schedule.examTimes || []), { orientation: "portrait", profile: "timePrint", title: "考试时间表" });
   }
   return workbook;
 }
@@ -1110,21 +1121,25 @@ function appendSheet(workbook, name, rows, options = {}) {
   const bodyRows = rows.length ? rows : [{ 提示: "暂无数据" }];
   const headers = Object.keys(bodyRows[0]).filter((header) => !header.startsWith("__"));
   const visibleRows = bodyRows.map((row) => Object.fromEntries(headers.map((header) => [header, row[header]])));
-  const sheet = options.title ? XLSX.utils.aoa_to_sheet([[options.title]]) : XLSX.utils.json_to_sheet(visibleRows);
+  const titleRows = options.title ? [[options.title], ...(options.note ? [[options.note]] : [])] : [];
+  const sheet = options.title ? XLSX.utils.aoa_to_sheet(titleRows) : XLSX.utils.json_to_sheet(visibleRows);
   if (options.title) {
-    XLSX.utils.sheet_add_json(sheet, visibleRows, { origin: "A2", skipHeader: false });
+    XLSX.utils.sheet_add_json(sheet, visibleRows, { origin: `A${titleRows.length + 1}`, skipHeader: false });
   }
-  setSheetPrintDefaults(sheet, headers, bodyRows, options);
-  if (options.title) ensureTitleMerge(sheet, headers, options.title);
+  setSheetPrintDefaults(sheet, headers, bodyRows, { ...options, titleRowCount: titleRows.length });
+  if (options.title) ensureTitleMerge(sheet, headers, options.title, options.note);
   XLSX.utils.book_append_sheet(workbook, sheet, safeSheetName(name));
 }
 
-function ensureTitleMerge(sheet, headers, title) {
+function ensureTitleMerge(sheet, headers, title, note = "") {
   const range = XLSX.utils.decode_range(sheet["!ref"] || "A1:A1");
-  range.e.r = Math.max(range.e.r, 1);
+  range.e.r = Math.max(range.e.r, note ? 2 : 1);
   range.e.c = Math.max(range.e.c, headers.length - 1);
   sheet["!ref"] = XLSX.utils.encode_range(range);
-  sheet["!merges"] = [{ s: { r: 0, c: 0 }, e: { r: 0, c: Math.max(0, headers.length - 1) } }];
+  sheet["!merges"] = [
+    { s: { r: 0, c: 0 }, e: { r: 0, c: Math.max(0, headers.length - 1) } },
+    ...(note ? [{ s: { r: 1, c: 0 }, e: { r: 1, c: Math.max(0, headers.length - 1) } }] : []),
+  ];
   const titleAddress = XLSX.utils.encode_cell({ r: 0, c: 0 });
   sheet[titleAddress] = sheet[titleAddress] || { t: "s", v: title };
   sheet[titleAddress].v = title;
@@ -1133,6 +1148,16 @@ function ensureTitleMerge(sheet, headers, title) {
     alignment: { horizontal: "center", vertical: "center", wrapText: true },
     fill: { fgColor: { rgb: "EAF2FF" } },
   };
+  if (note) {
+    const noteAddress = XLSX.utils.encode_cell({ r: 1, c: 0 });
+    sheet[noteAddress] = sheet[noteAddress] || { t: "s", v: note };
+    sheet[noteAddress].v = note;
+    sheet[noteAddress].s = {
+      font: { name: "宋体", sz: 9, color: { rgb: "3A3A3C" } },
+      alignment: { horizontal: "center", vertical: "center", wrapText: true },
+      fill: { fgColor: { rgb: "F7FAFF" } },
+    };
+  }
 }
 
 function appendClassSheets(workbook, rows) {
@@ -1145,7 +1170,12 @@ function appendClassSheets(workbook, rows) {
     const classRows = rows
       .filter((row) => row.__className === className)
       .map(({ __className, ...row }) => row);
-    appendSheet(workbook, safeSheetName(className), classRows, { orientation: "landscape", profile: "classPrint", title: `${className}考场安排` });
+    appendSheet(workbook, safeSheetName(className), classRows, {
+      orientation: "landscape",
+      profile: "classPrint",
+      title: `${className}考场安排`,
+      note: "说明：语数物/座位号、语数历/座位号、外语、化学、地理、政治、生物均为“考场/座位号”；黄色底色表示该科为自习安排。",
+    });
   }
 }
 
@@ -1328,21 +1358,24 @@ function buildDoorRows(schedule, rooms) {
     const main = schedule.mainAssignments.filter((item) => item.roomNo === room.roomNo);
     const foreign = schedule.foreignAssignments.filter((item) => item.roomNo === room.roomNo);
     const elective = schedule.electiveAssignments.filter((item) => item.roomNo === room.roomNo);
-    const subjectCount = (subject) => schedule.subjectAssignments.filter((item) => item.roomNo === room.roomNo && item.subjectLabel === subject).length;
-    const hasSelfStudyRoom = schedule.subjectAssignments.some((item) => item.roomNo === room.roomNo && item.status === "自习");
+    const subjectRows = (subject) => schedule.subjectAssignments.filter((item) => item.roomNo === room.roomNo && item.subjectLabel === subject);
+    const isSelfStudySubjectRoom = (subject) => subjectRows(subject).some((item) => item.status === "自习");
     return {
       门牌号: room.doorNo,
       教室: room.roomName,
       考场号: room.roomNo,
       语数物历: main.length || "",
       外语: foreign.length || "",
-      化学: subjectCount("化学") || "",
-      地理: subjectCount("地理") || "",
-      政治: subjectCount("政治") || "",
-      生物: subjectCount("生物") || "",
+      化学: subjectRows("化学").length || "",
+      地理: subjectRows("地理").length || "",
+      政治: subjectRows("政治").length || "",
+      生物: subjectRows("生物").length || "",
       四选二: elective.length || "",
-      自习: hasSelfStudyRoom ? "自习" : "",
       人数: room.capacity,
+      "__selfStudy:化学": isSelfStudySubjectRoom("化学"),
+      "__selfStudy:地理": isSelfStudySubjectRoom("地理"),
+      "__selfStudy:政治": isSelfStudySubjectRoom("政治"),
+      "__selfStudy:生物": isSelfStudySubjectRoom("生物"),
     };
   });
 }
@@ -1427,12 +1460,12 @@ function mainExamHeader(row) {
 
 function setSheetPrintDefaults(sheet, headers = [], rows = [], options = {}) {
   const profile = options.profile || "default";
-  const compact = profile === "classPrint" || profile === "roomPrint" || profile === "print";
+  const compact = profile === "classPrint" || profile === "roomPrint" || profile === "print" || profile === "timePrint" || profile === "overview";
   sheet["!margins"] = compact
-    ? { left: 0.12, right: 0.12, top: 0.18, bottom: 0.18, header: 0.08, footer: 0.08 }
+    ? { left: 0.2, right: 0.2, top: 0.28, bottom: 0.28, header: 0.1, footer: 0.1 }
     : { left: 0.18, right: 0.18, top: 0.22, bottom: 0.22, header: 0.1, footer: 0.1 };
   sheet["!cols"] = headers.map((header) => ({ wch: estimateColumnWidth(header, rows, options) }));
-  sheet["!freeze"] = { xSplit: 0, ySplit: options.title ? 2 : 1 };
+  sheet["!freeze"] = { xSplit: 0, ySplit: (options.titleRowCount || 0) + 1 };
   sheet["!pageSetup"] = {
     paperSize: 9,
     orientation: options.orientation || (headers.length > 8 || rows.length > 24 ? "landscape" : "portrait"),
@@ -1448,8 +1481,20 @@ function estimateColumnWidth(header, rows = [], options = {}) {
   const sampleWidth = rows
     .slice(0, 160)
     .reduce((max, row) => Math.max(max, safeString(row[header]).length), safeString(header).length);
-  const compact = options.profile === "print";
+  const compact = options.profile === "print" || options.profile === "overview" || options.profile === "timePrint";
   const veryCompact = options.profile === "classPrint" || options.profile === "roomPrint";
+  if (options.profile === "timePrint") {
+    if (header === "序号") return 8;
+    if (header === "科目") return 14;
+    if (header === "日期") return 18;
+    if (header === "时间") return 24;
+  }
+  if (options.profile === "overview") {
+    if (header === "门牌号") return 10;
+    if (header === "教室") return 14;
+    if (header === "考场号") return 9;
+    return 8;
+  }
   if (options.profile === "validation") {
     if (header === "级别") return 10;
     if (header === "项目") return 12;
@@ -1458,10 +1503,10 @@ function estimateColumnWidth(header, rows = [], options = {}) {
     if (header === "建议处理") return 24;
   }
   if (header === "科目") return 10;
-  if (header === "姓名") return veryCompact ? 8 : Math.min(Math.max(sampleWidth + 2, 8), 10);
-  if (header === "班级") return 8;
-  if (header === "考号") return veryCompact ? 10 : Math.min(Math.max(sampleWidth + 1, 12), 15);
-  if (header === "选科") return veryCompact ? 8 : 10;
+  if (header === "姓名") return veryCompact ? 9 : Math.min(Math.max(sampleWidth + 2, 8), 10);
+  if (header === "班级") return veryCompact ? 9 : 8;
+  if (header === "考号") return veryCompact ? 13 : Math.min(Math.max(sampleWidth + 1, 12), 15);
+  if (header === "选科") return veryCompact ? 7 : 10;
   if (header.includes("座位")) return compact ? 6 : 8;
   if (header === "语数物/座位号" || header === "语数历/座位号") return compact ? 10 : 12;
   if (header === "外语" || header === "当科") return compact ? 10 : 12;
@@ -1475,8 +1520,9 @@ function estimateColumnWidth(header, rows = [], options = {}) {
 
 function applyCellStyle(sheet, headers = [], rows = [], options = {}) {
   const range = XLSX.utils.decode_range(sheet["!ref"] || "A1:A1");
-  const headerRowIndex = options.title ? 1 : 0;
-  const dataStartRowIndex = options.title ? 2 : 1;
+  const titleRowCount = options.titleRowCount || (options.title ? 1 : 0);
+  const headerRowIndex = titleRowCount;
+  const dataStartRowIndex = titleRowCount + 1;
   const profile = options.profile || "default";
   for (let row = range.s.r; row <= range.e.r; row += 1) {
     for (let col = range.s.c; col <= range.e.c; col += 1) {
@@ -1487,8 +1533,8 @@ function applyCellStyle(sheet, headers = [], rows = [], options = {}) {
       sheet[address].s = {
         font: {
           name: "宋体",
-          sz: row === 0 && options.title ? 16 : row === headerRowIndex ? 11 : profile === "classPrint" || profile === "roomPrint" ? 9 : 10,
-          bold: row === 0 && options.title ? true : row === headerRowIndex,
+          sz: getCellFontSize({ row, headerRowIndex, profile, titleRowCount }),
+          bold: row < titleRowCount ? row === 0 : row === headerRowIndex,
           color: { rgb: "1D1D1F" },
         },
         alignment: { horizontal: "center", vertical: "center", wrapText: true },
@@ -1501,38 +1547,69 @@ function applyCellStyle(sheet, headers = [], rows = [], options = {}) {
       };
       if (row === 0 && options.title) {
         sheet[address].s.fill = { fgColor: { rgb: "DCEBFF" } };
+      } else if (row > 0 && row < titleRowCount) {
+        sheet[address].s.fill = { fgColor: { rgb: "F7FAFF" } };
       } else if (row === headerRowIndex) {
         sheet[address].s.fill = { fgColor: { rgb: "F2F2F7" } };
-      } else if (sheet[address].v === "自习" || String(sheet[address].v).includes("自习") || dataRow?.[`__selfStudy:${header}`] || (profile === "overview" && String(dataRow?.自习 || "").includes("自习"))) {
+      } else if (sheet[address].v === "自习" || String(sheet[address].v).includes("自习") || dataRow?.[`__selfStudy:${header}`]) {
         sheet[address].s.fill = { fgColor: { rgb: "FFF1C9" } };
       }
     }
   }
-  const rowHeight = profile === "classPrint" || profile === "roomPrint" ? 15 : profile === "validation" ? 18 : profile === "print" ? 16 : 18;
+  const rowHeight = getBodyRowHeight(profile, rows.length);
   sheet["!rows"] = Array.from({ length: range.e.r + 1 }, (_, index) => ({
-    hpt: index === 0 && options.title ? 26 : index === 0 ? 22 : rowHeight,
+    hpt: getRowHeight({ index, titleRowCount, headerRowIndex, profile, rowHeight }),
   }));
   if (sheet["!merges"]?.length && options.title) {
-    sheet["!rows"][0] = { hpt: 26 };
+    sheet["!rows"][0] = { hpt: profile === "timePrint" ? 42 : 28 };
+    if (titleRowCount > 1) sheet["!rows"][1] = { hpt: 24 };
   }
   const titleRow = options.title ? 0 : null;
   if (titleRow === 0) {
-    for (let col = range.s.c; col <= range.e.c; col += 1) {
-      const address = XLSX.utils.encode_cell({ r: 0, c: col });
-      if (!sheet[address]) continue;
-      sheet[address].s = {
-        font: { name: "宋体", sz: 12, bold: true },
-        alignment: { horizontal: "center", vertical: "center", wrapText: true },
-        fill: { fgColor: { rgb: "EAF2FF" } },
-        border: {
-          top: { style: "thin", color: { rgb: "000000" } },
-          bottom: { style: "thin", color: { rgb: "000000" } },
-          left: { style: "thin", color: { rgb: "000000" } },
-          right: { style: "thin", color: { rgb: "000000" } },
-        },
-      };
+    for (let titleIndex = 0; titleIndex < titleRowCount; titleIndex += 1) {
+      for (let col = range.s.c; col <= range.e.c; col += 1) {
+        const address = XLSX.utils.encode_cell({ r: titleIndex, c: col });
+        if (!sheet[address]) continue;
+        sheet[address].s = {
+          font: { name: "宋体", sz: titleIndex === 0 ? (profile === "timePrint" ? 20 : 14) : 9, bold: titleIndex === 0, color: { rgb: "1D1D1F" } },
+          alignment: { horizontal: "center", vertical: "center", wrapText: true },
+          fill: { fgColor: { rgb: titleIndex === 0 ? "EAF2FF" : "F7FAFF" } },
+          border: {
+            top: { style: "thin", color: { rgb: "000000" } },
+            bottom: { style: "thin", color: { rgb: "000000" } },
+            left: { style: "thin", color: { rgb: "000000" } },
+            right: { style: "thin", color: { rgb: "000000" } },
+          },
+        };
+      }
     }
   }
+}
+
+function getCellFontSize({ row, headerRowIndex, profile, titleRowCount }) {
+  if (row === 0 && titleRowCount) return profile === "timePrint" ? 20 : 14;
+  if (row > 0 && row < titleRowCount) return 9;
+  if (row === headerRowIndex) return profile === "timePrint" ? 13 : 10;
+  if (profile === "timePrint") return 14;
+  if (profile === "classPrint" || profile === "roomPrint") return 9;
+  return 10;
+}
+
+function getBodyRowHeight(profile, rowCount) {
+  if (profile === "timePrint") return rowCount <= 8 ? 42 : 30;
+  if (profile === "classPrint") return rowCount > 45 ? 14 : 15.5;
+  if (profile === "roomPrint") return rowCount > 42 ? 13.5 : 15.5;
+  if (profile === "overview") return 18;
+  if (profile === "validation") return 18;
+  if (profile === "print") return 16;
+  return 18;
+}
+
+function getRowHeight({ index, titleRowCount, headerRowIndex, profile, rowHeight }) {
+  if (index === 0 && titleRowCount) return profile === "timePrint" ? 42 : 28;
+  if (index > 0 && index < titleRowCount) return 24;
+  if (index === headerRowIndex) return profile === "timePrint" ? 28 : 20;
+  return rowHeight;
 }
 
 function safeSheetName(name) {
