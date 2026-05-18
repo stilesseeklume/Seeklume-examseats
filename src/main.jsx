@@ -749,7 +749,9 @@ function App() {
     <main className="app-shell home-shell">
       <header className="marketing-nav">
         <div>
-          <strong>Seeklume ExamSeats</strong>
+          <a href="https://home.seeklume.work/" style={{ color: "inherit", textDecoration: "none" }}>
+            <strong>Seeklume ExamSeats</strong>
+          </a>
         </div>
         <button type="button" className="nav-link" onClick={() => setShowAbout(true)}><Info size={16} /> 隐私与开源</button>
       </header>
@@ -806,7 +808,9 @@ function App() {
     <main className="app-shell">
       <header className="topbar">
         <div className="topbar-brand">
-          <span className="brand-logo">Seeklume ExamSeats</span>
+          <a href="https://home.seeklume.work/" style={{ color: "inherit", textDecoration: "none" }}>
+            <span className="brand-logo">Seeklume ExamSeats</span>
+          </a>
         </div>
         <div className={`dynamic-island ${visibleErrors.length ? "warning" : "ready"}`} role="status">
           <span className="island-emoji" aria-hidden="true">{visibleErrors.length ? "⚠️" : activeStepItem.emoji}</span>
