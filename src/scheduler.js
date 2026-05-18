@@ -978,8 +978,8 @@ function groupBy(rows, field) {
   return groups;
 }
 
-export async function buildWorkbookFile({ examName, examDate, schedule, rooms, selected = {}, group = EXPORT_GROUPS.ALL, fileNameSuffix = "" }) {
-  const workbook = buildWorkbook({ schedule, rooms, selected, group });
+export async function buildWorkbookFile({ examName, examDate, schedule, rooms, selected = {}, group = EXPORT_GROUPS.ALL, fileNameSuffix = "", printSettingsBySheet = {} }) {
+  const workbook = buildWorkbook({ schedule, rooms, selected, group, printSettingsBySheet });
   ensureWorkbookHasSheet(workbook);
   const fileName = buildExportFileName(examName, examDate, fileNameSuffix || defaultExportSuffix(group));
   const rawData = XLSX.write(workbook, { bookType: "xlsx", type: "array", compression: true });
@@ -992,8 +992,8 @@ function ensureWorkbookHasSheet(workbook) {
   appendSheet(workbook, "暂无数据", [{ 提示: "暂无可导出的内容，请先完成导入和生成排考。" }], { orientation: "portrait", profile: "print" });
 }
 
-export async function exportWorkbook({ examName, examDate, schedule, rooms, selected = {}, group = EXPORT_GROUPS.ALL, fileNameSuffix = "" }) {
-  return buildWorkbookFile({ examName, examDate, schedule, rooms, selected, group, fileNameSuffix });
+export async function exportWorkbook({ examName, examDate, schedule, rooms, selected = {}, group = EXPORT_GROUPS.ALL, fileNameSuffix = "", printSettingsBySheet = {} }) {
+  return buildWorkbookFile({ examName, examDate, schedule, rooms, selected, group, fileNameSuffix, printSettingsBySheet });
 }
 
 async function patchWorkbookData(arrayBuffer, workbook) {
@@ -1046,7 +1046,7 @@ function injectPageSetup(xml, settings = {}) {
   return next;
 }
 
-export function buildWorkbook({ schedule, rooms, selected = {}, group = EXPORT_GROUPS.ALL }) {
+export function buildWorkbook({ schedule, rooms, selected = {}, group = EXPORT_GROUPS.ALL, printSettingsBySheet = {} }) {
   const workbook = XLSX.utils.book_new();
   const enabled = {
     grade: true,
@@ -1068,16 +1068,13 @@ export function buildWorkbook({ schedule, rooms, selected = {}, group = EXPORT_G
     appendSheet(workbook, "管理总表", buildAdminRows(schedule.allRows), { orientation: "landscape", profile: "admin" });
   }
   if ((group === EXPORT_GROUPS.ALL && enabled.classes) || group === EXPORT_GROUPS.CLASS) {
-    if (enabled.classes) appendClassSheets(workbook, buildPrintRows(schedule.allRows));
+    if (enabled.classes) appendClassSheets(workbook, buildPrintRows(schedule.allRows), printSettingsBySheet);
   }
   if ((group === EXPORT_GROUPS.ALL && enabled.subjectSheets !== false) || group === EXPORT_GROUPS.SUBJECT) {
     if (schedule.mode === SCHEDULE_MODES.THREE_DAY_SPLIT) appendSubjectSheets(workbook, schedule);
   }
   if ((group === EXPORT_GROUPS.ALL && enabled.roomSheets) || group === EXPORT_GROUPS.ROOM) {
-    if (enabled.roomSheets) appendRoomSheets(workbook, schedule);
-  }
-  if ((group === EXPORT_GROUPS.ALL && enabled.roomSummary) || group === EXPORT_GROUPS.ROOM_SUMMARY) {
-    if (enabled.roomSummary) appendSheet(workbook, "考场汇总", buildRoomSummaryRows(schedule, rooms), { orientation: "portrait" });
+    if (enabled.roomSheets) appendRoomSheets(workbook, schedule, printSettingsBySheet);
   }
   if ((group === EXPORT_GROUPS.ALL && enabled.timeSheet !== false) || group === EXPORT_GROUPS.TIME) {
     appendSheet(workbook, "考试时间", buildTimeSheetRows(schedule.examTimes || []), { orientation: "portrait", profile: "timePrint", title: "考试时间表" });
@@ -1094,7 +1091,6 @@ export function buildExportJobs({ examName, examDate, schedule, rooms, selected 
   if (selected.classes) jobs.push({ group: EXPORT_GROUPS.CLASS, fileNameSuffix: "班主任表" });
   if (selected.subjectSheets && schedule.mode === SCHEDULE_MODES.THREE_DAY_SPLIT) jobs.push({ group: EXPORT_GROUPS.SUBJECT, fileNameSuffix: "科目表" });
   if (selected.roomSheets) jobs.push({ group: EXPORT_GROUPS.ROOM, fileNameSuffix: "考场信息表" });
-  if (selected.roomSummary) jobs.push({ group: EXPORT_GROUPS.ROOM_SUMMARY, fileNameSuffix: "考务汇总" });
   if (selected.doorSummary) jobs.push({ group: EXPORT_GROUPS.DOOR_SUMMARY, fileNameSuffix: "门牌人数" });
   if (selected.timeSheet) jobs.push({ group: EXPORT_GROUPS.TIME, fileNameSuffix: "考试时间" });
   return jobs;
@@ -1110,7 +1106,6 @@ function defaultExportSuffix(group) {
   if (group === EXPORT_GROUPS.CLASS) return "班主任表";
   if (group === EXPORT_GROUPS.ROOM) return "考场信息表";
   if (group === EXPORT_GROUPS.SUBJECT) return "科目表";
-  if (group === EXPORT_GROUPS.ROOM_SUMMARY) return "考务汇总";
   if (group === EXPORT_GROUPS.DOOR_SUMMARY) return "门牌人数";
   if (group === EXPORT_GROUPS.TIME) return "考试时间";
   if (group === EXPORT_GROUPS.VALIDATION) return "校验报告";
@@ -1160,7 +1155,7 @@ function ensureTitleMerge(sheet, headers, title, note = "") {
   }
 }
 
-function appendClassSheets(workbook, rows) {
+function appendClassSheets(workbook, rows, printSettingsBySheet = {}) {
   const classes = [...new Set(rows.map((row) => row.__className))].sort((a, b) => a.localeCompare(b, "zh-Hans-CN", { numeric: true }));
   if (!classes.length) {
     appendSheet(workbook, "班主任表", [{ 提示: "暂无班级数据，请先导入学生并生成排考。" }], { orientation: "portrait", profile: "print", title: "班主任表" });
@@ -1170,8 +1165,9 @@ function appendClassSheets(workbook, rows) {
     const classRows = rows
       .filter((row) => row.__className === className)
       .map(({ __className, ...row }) => row);
+    const defaultOrientation = recommendExportOrientation(classRows, "classPrint");
     appendSheet(workbook, safeSheetName(className), classRows, {
-      orientation: "landscape",
+      orientation: getExportOrientation(printSettingsBySheet, "classes", className, defaultOrientation),
       profile: "classPrint",
       title: `${className}考场安排`,
       note: "说明：语数物/座位号、语数历/座位号、外语、化学、地理、政治、生物均为“考场/座位号”；黄色底色表示该科为自习安排。",
@@ -1186,15 +1182,26 @@ function appendSubjectSheets(workbook, schedule) {
   }
 }
 
-function appendRoomSheets(workbook, schedule) {
+function appendRoomSheets(workbook, schedule, printSettingsBySheet = {}) {
   const groups = buildRoomSheetGroups(schedule);
   if (!groups.length) {
     appendSheet(workbook, "考场信息表", [{ 提示: "暂无考场安排，请先完成排考。" }], { orientation: "portrait", profile: "print", title: "考场信息表" });
     return;
   }
   for (const group of groups) {
-    appendSheet(workbook, group.name, group.rows, { orientation: "portrait", profile: "roomPrint", title: `${group.name}考场信息表` });
+    appendSheet(workbook, group.name, group.rows, { orientation: getExportOrientation(printSettingsBySheet, "roomDetails", group.name, recommendExportOrientation(group.rows, "roomPrint")), profile: "roomPrint", title: `${group.name}考场信息表` });
   }
+}
+
+function getExportOrientation(settingsBySheet, tabKey, pageKey, fallback) {
+  return settingsBySheet?.[`${tabKey}:${pageKey}`]?.orientation || fallback;
+}
+
+function recommendExportOrientation(rows, profile = "") {
+  const headers = Object.keys(rows[0] || {}).filter((header) => !header.startsWith("__"));
+  if (profile === "roomPrint" && headers.length <= 6 && rows.length <= 46) return "portrait";
+  if (profile === "classPrint" && headers.length <= 8 && rows.length <= 42) return "portrait";
+  return headers.length >= 8 ? "landscape" : "portrait";
 }
 
 function statusSort(a, b) {
@@ -1370,8 +1377,9 @@ function buildDoorRows(schedule, rooms) {
       地理: subjectRows("地理").length || "",
       政治: subjectRows("政治").length || "",
       生物: subjectRows("生物").length || "",
-      四选二: elective.length || "",
+      四选二: describeAssignments(elective),
       人数: room.capacity,
+      "__comboSummary:四选二": describeAssignments(elective),
       "__selfStudy:化学": isSelfStudySubjectRoom("化学"),
       "__selfStudy:地理": isSelfStudySubjectRoom("地理"),
       "__selfStudy:政治": isSelfStudySubjectRoom("政治"),
@@ -1512,6 +1520,7 @@ function estimateColumnWidth(header, rows = [], options = {}) {
   if (header === "外语" || header === "当科") return compact ? 10 : 12;
   if (header.includes("考场")) return compact ? 8 : 10;
   if (header.includes("组合")) return compact ? 10 : 12;
+  if (header.includes("四选二")) return compact ? 18 : 20;
   if (header.includes("时间")) return 34;
   if (header.includes("排名")) return 12;
   if (compact) return Math.min(Math.max(sampleWidth + 1, 6), 12);

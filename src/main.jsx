@@ -22,6 +22,7 @@ import {
   Globe2,
   History,
   Info,
+  Image,
   Plus,
   School,
   Sparkles,
@@ -139,7 +140,6 @@ function App() {
     if (selected.roomSheets) items.push("考场信息表");
     if (selected.timeSheet) items.push("考试时间表");
     if (selected.subjectSheets && schedule.mode === SCHEDULE_MODES.THREE_DAY_SPLIT) items.push("科目总表");
-    if (selected.roomSummary) items.push("考务汇总");
     return items;
   }, [selected, schedule.mode]);
   const studentSearchRows = useMemo(() => searchStudents(schedule.allRows, studentQuery), [schedule.allRows, studentQuery]);
@@ -147,6 +147,10 @@ function App() {
     const langs = new Set([...physics.students, ...history.students].map((student) => student.language).filter((language) => language !== "英语"));
     return LANGUAGE_SUBJECTS.filter((language) => langs.has(language));
   }, [physics.students, history.students]);
+  const minorRoomRecommendation = useMemo(
+    () => buildMinorRoomRecommendation({ students: [...physics.students, ...history.students], rooms, minorLanguages }),
+    [physics.students, history.students, rooms, minorLanguages],
+  );
   const foreignLanguages = useMemo(() => {
     const langs = new Set([...physics.students, ...history.students].map((student) => student.language || "英语"));
     if (physics.students.length || history.students.length) langs.add("英语");
@@ -277,6 +281,21 @@ function App() {
     updateMinorRoom(language, { [field]: value });
   };
 
+  const applyMinorRoomRecommendation = () => {
+    const next = { ...minorRooms };
+    for (const item of minorRoomRecommendation.items) {
+      if (!item.room) continue;
+      next[item.language] = {
+        ...next[item.language],
+        roomNo: item.room.roomNo,
+        doorNo: item.room.doorNo || "",
+        roomName: item.room.roomName || "",
+      };
+    }
+    setMinorRooms(next);
+    localStorage.setItem("minor-language-rooms", JSON.stringify(next));
+  };
+
   const updateExamTime = (index, patch) => {
     const next = examTimes.map((item, itemIndex) => (itemIndex === index ? { ...item, ...patch } : item));
     setExamTimes(next);
@@ -291,9 +310,19 @@ function App() {
     localStorage.setItem("exam-times", JSON.stringify(next));
   };
 
+  const applyParsedExamTimes = (parsedTimes) => {
+    const next = mergeParsedExamTimes(examTimes, parsedTimes);
+    const firstDate = getEarliestExamDate(next) || examDate;
+    setExamDate(firstDate);
+    setExamTimes(next);
+    localStorage.setItem("exam-date", firstDate);
+    localStorage.setItem("exam-times", JSON.stringify(next));
+  };
+
   const updateScheduleMode = (mode) => {
     setScheduleMode(mode);
     localStorage.setItem("schedule-mode", mode);
+    applyTimeTemplate(examDate, mode);
   };
 
   const saveRecord = () => {
@@ -344,12 +373,13 @@ function App() {
   const exportNow = async () => {
     if (allErrors.length) return;
     const jobs = buildExportJobs({ examName, examDate, schedule, rooms, selected, exportMode });
+    const printSettingsBySheet = loadPreviewPrintSettings();
     if (exportMode === "package") {
-      await exportZipPackage({ examName, examDate, schedule, rooms, selected, jobs });
+      await exportZipPackage({ examName, examDate, schedule, rooms, selected, jobs, printSettingsBySheet });
       return;
     }
     for (const job of jobs) {
-      const { fileName, data } = await buildWorkbookFile({ examName, examDate, schedule, rooms, selected, ...job });
+      const { fileName, data } = await buildWorkbookFile({ examName, examDate, schedule, rooms, selected, printSettingsBySheet, ...job });
       downloadBlob(new Blob([data], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }), fileName);
     }
   };
@@ -553,6 +583,24 @@ function App() {
       content: (
         <>
           <p className="muted">小语种只用于外语考试，不限制容量。座位号按对应语种成绩倒序生成。小语种可使用普通考场号，例如 23；其他科目仍可把 23 当普通考场使用。</p>
+          <div className="minor-recommend-card">
+            <div>
+              <strong>推荐考场</strong>
+              <span>{minorRoomRecommendation.summary}</span>
+            </div>
+            <button type="button" onClick={applyMinorRoomRecommendation} disabled={!minorRoomRecommendation.items.some((item) => item.room)}>
+              自动填入推荐
+            </button>
+          </div>
+          {minorRoomRecommendation.items.length > 0 && (
+            <div className="minor-recommend-list">
+              {minorRoomRecommendation.items.map((item) => (
+                <span key={item.language}>
+                  {item.language} {item.count} 人：{item.room ? `${item.room.roomNo}考场 · ${item.room.doorNo || "无门牌"} · ${item.room.roomName || "无教室名"}` : "暂无可推荐考场"}
+                </span>
+              ))}
+            </div>
+          )}
           {minorLanguages.length === 0 ? (
             <div className="empty">当前成绩单未发现日语、俄语、西班牙语、法语、德语学生。</div>
           ) : (
@@ -583,23 +631,16 @@ function App() {
             <label>
               <span>第一天日期</span>
               <input type="date" value={examDate} onChange={(event) => {
-                setExamDate(event.target.value);
-                localStorage.setItem("exam-date", event.target.value);
+                applyTimeTemplate(event.target.value, scheduleMode);
               }} />
             </label>
-            <button type="button" className="primary" onClick={() => applyTimeTemplate(examDate, scheduleMode)}>{scheduleMode === SCHEDULE_MODES.TWO_DAY_COMBO ? "按两天模板铺开" : "按三天模板铺开"}</button>
-            <details className="advanced-mode">
-              <summary>高级设置</summary>
-              <label className="check-option">
-                <input type="radio" name="mode" checked={scheduleMode === SCHEDULE_MODES.THREE_DAY_SPLIT} onChange={() => updateScheduleMode(SCHEDULE_MODES.THREE_DAY_SPLIT)} />
-                3天考试
-              </label>
-              <label className="check-option">
-                <input type="radio" name="mode" checked={scheduleMode === SCHEDULE_MODES.TWO_DAY_COMBO} onChange={() => updateScheduleMode(SCHEDULE_MODES.TWO_DAY_COMBO)} />
-                2天考试
-              </label>
-            </details>
+            <div className="time-mode-switch" role="group" aria-label="考试天数">
+              <button type="button" className={scheduleMode === SCHEDULE_MODES.THREE_DAY_SPLIT ? "active" : ""} onClick={() => updateScheduleMode(SCHEDULE_MODES.THREE_DAY_SPLIT)}>三天</button>
+              <button type="button" className={scheduleMode === SCHEDULE_MODES.TWO_DAY_COMBO ? "active" : ""} onClick={() => updateScheduleMode(SCHEDULE_MODES.TWO_DAY_COMBO)}>两天</button>
+            </div>
+            <span className="time-template-hint">改日期或天数会自动铺开时间表。</span>
           </div>
+          <TimeNoticeImporter examDate={examDate} examTimes={examTimes} onApply={applyParsedExamTimes} />
           <div className="table-wrap compact-table">
             <table>
               <thead>
@@ -673,7 +714,6 @@ function App() {
             <CheckOption label="考场信息表" checked={selected.roomSheets} onChange={(roomSheets) => setSelected({ ...selected, roomSheets })} />
             <CheckOption label="考试时间表" checked={selected.timeSheet} onChange={(timeSheet) => setSelected({ ...selected, timeSheet })} />
             <CheckOption label="科目总表" checked={selected.subjectSheets} onChange={(subjectSheets) => setSelected({ ...selected, subjectSheets })} />
-            <CheckOption label="考务汇总" checked={selected.roomSummary} onChange={(roomSummary) => setSelected({ ...selected, roomSummary })} />
           </div>
           <div className="export-mode">
             <span>导出方式</span>
@@ -931,10 +971,10 @@ function AboutModal({ onClose }) {
   );
 }
 
-async function exportZipPackage({ examName, examDate, schedule, rooms, selected, jobs }) {
+async function exportZipPackage({ examName, examDate, schedule, rooms, selected, jobs, printSettingsBySheet }) {
   const zip = new JSZip();
   for (const job of jobs) {
-    const { fileName, data } = await buildWorkbookFile({ examName, examDate, schedule, rooms, selected, ...job });
+    const { fileName, data } = await buildWorkbookFile({ examName, examDate, schedule, rooms, selected, printSettingsBySheet, ...job });
     assertWorkbookDownloadable(fileName, data);
     zip.file(fileName, data);
   }
@@ -1157,6 +1197,233 @@ function todayLocalDateString() {
   const mm = String(date.getMonth() + 1).padStart(2, "0");
   const dd = String(date.getDate()).padStart(2, "0");
   return `${yyyy}-${mm}-${dd}`;
+}
+
+function TimeNoticeImporter({ examDate, examTimes, onApply }) {
+  const [text, setText] = useState("");
+  const [imageName, setImageName] = useState("");
+  const [recognizing, setRecognizing] = useState(false);
+  const [message, setMessage] = useState("可粘贴通知文字，或上传微信截图、图片通知。");
+  const [preview, setPreview] = useState([]);
+  const fileInputId = "exam-time-notice-input";
+
+  const parseCurrentText = (rawText) => {
+    const parsed = parseExamNoticeText(rawText, examDate);
+    setPreview(parsed);
+    if (!parsed.length) {
+      setMessage("没有识别到可用的时间片段，试着把通知里的日期和“科目 时间”一起贴进来。");
+      return;
+    }
+    setMessage(`识别到 ${parsed.length} 条时间信息，确认后可直接写入考试时间表。`);
+  };
+
+  const handleTextChange = (event) => {
+    const next = event.target.value;
+    setText(next);
+    parseCurrentText(next);
+  };
+
+  const handleFile = async (file) => {
+    if (!file) return;
+    setImageName(file.name);
+    setMessage("已收到图片，正在离线识别文字；第一次可能需要等几秒。");
+    setRecognizing(true);
+    try {
+      const extracted = await extractTextFromImage(file);
+      const merged = [text, extracted].filter(Boolean).join("\n");
+      if (!merged.trim()) {
+        setMessage("没有提取到清晰文字。你可以先把截图里的通知文字复制出来再贴这里。");
+        setPreview([]);
+        return;
+      }
+      setText(merged);
+      parseCurrentText(merged);
+    } catch (error) {
+      setMessage(`暂时无法直接识别这张图：${error?.message || "请把截图里的文字复制后贴入"}`);
+    } finally {
+      setRecognizing(false);
+    }
+  };
+
+  return (
+    <details className="notice-importer" open>
+      <summary>
+        <span>导入通知时间</span>
+        <small>收到微信截图或文字通知时再打开</small>
+      </summary>
+      <div className="notice-import-grid">
+        <label className="notice-input-card">
+          <div className="notice-input-head">
+            <Image size={16} />
+            <strong>通知文字 / OCR 结果</strong>
+          </div>
+          <textarea value={text} placeholder="例如：5月30日 上午9:00-11:30 语文；下午15:00-17:00 数学 ..." onChange={handleTextChange} />
+        </label>
+        <div className="notice-side-card">
+          <label className="notice-upload">
+            <input id={fileInputId} type="file" accept="image/*" onChange={(event) => event.target.files?.[0] && handleFile(event.target.files[0])} />
+            <span className="notice-upload-icon" aria-hidden="true">🖼️</span>
+            <strong>{recognizing ? "正在识别图片" : "上传通知截图"}</strong>
+            <small>{imageName || "微信截图、照片、通知图片都可以"}</small>
+          </label>
+          <div className="notice-message">{message}</div>
+          {preview.length > 0 && (
+            <>
+              <div className="notice-preview-head">
+                <span>识别预览</span>
+                <button type="button" className="primary" onClick={() => onApply(preview)}>写入考试时间</button>
+              </div>
+              <div className="notice-preview-list">
+                {preview.map((item) => (
+                  <span key={`${item.subject}-${item.date}-${item.start}-${item.end}`}>
+                    {item.subject} · {item.date} · {item.start}-{item.end}
+                  </span>
+                ))}
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+      <p className="notice-tip">支持“5月30日 语文 9:00-11:30”这类文字，也支持通知里分行写法。图片识别如果不清楚，会提示你直接贴文字。</p>
+    </details>
+  );
+}
+
+async function extractTextFromImage(file) {
+  if (typeof window === "undefined") throw new Error("当前环境不可用");
+  const textRecognizer = window.OCR?.recognize || window.Tesseract?.recognize;
+  if (typeof textRecognizer === "function") {
+    const result = await textRecognizer(file, "chi_sim+eng");
+    return String(result?.data?.text || result?.text || "");
+  }
+  const tesseract = await import("tesseract.js");
+  const result = await tesseract.recognize(file, "chi_sim+eng");
+  return String(result?.data?.text || result?.text || "");
+}
+
+function parseExamNoticeText(rawText, examDate) {
+  const text = String(rawText || "").replace(/\r/g, "\n");
+  if (!text.trim()) return [];
+  const normalized = text
+    .replace(/[：:]/g, ":")
+    .replace(/[—–~～]/g, "-")
+    .replace(/[至到]/g, "-")
+    .replace(/[，,;]/g, "；");
+  const baseDate = getNoticeDate(normalized) || examDate || todayLocalDateString();
+  const sentences = normalized
+    .split(/[\n。！？!?.；;]/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const items = [];
+  let currentDate = baseDate;
+  for (const line of sentences) {
+    const lineDate = getNoticeDate(line);
+    if (lineDate) currentDate = lineDate;
+    const subjectMatches = extractNoticeSubjectTimes(line);
+    for (const match of subjectMatches) {
+      if (!match.subject || !match.start || !match.end) continue;
+      items.push({
+        subject: match.subject,
+        date: currentDate,
+        start: match.start,
+        end: match.end,
+      });
+    }
+  }
+  return dedupeExamTimes(items);
+}
+
+function extractNoticeSubjectTimes(line) {
+  const result = [];
+  const subjectPattern = "语文|数学|物理\\/历史|物理|历史|外语|英语|化学|地理|政治|生物|日语|俄语|法语|西班牙语|德语";
+  const subjectFirst = new RegExp(`(${subjectPattern})[^0-9]{0,12}([0-2]?\\d:[0-5]\\d)\\s*-\\s*([0-2]?\\d:[0-5]\\d)`, "g");
+  const timeFirst = new RegExp(`([0-2]?\\d:[0-5]\\d)\\s*-\\s*([0-2]?\\d:[0-5]\\d)[^\\u4e00-\\u9fa5]{0,8}(${subjectPattern})`, "g");
+  let match;
+  while ((match = subjectFirst.exec(line))) {
+    result.push({
+      subject: normalizeNoticeSubject(match[1]),
+      start: normalizeNoticeTime(match[2]),
+      end: normalizeNoticeTime(match[3]),
+    });
+  }
+  while ((match = timeFirst.exec(line))) {
+    const before = line.slice(Math.max(0, match.index - 12), match.index);
+    if (new RegExp(`(${subjectPattern})`).test(before)) continue;
+    result.push({
+      subject: normalizeNoticeSubject(match[3]),
+      start: normalizeNoticeTime(match[1]),
+      end: normalizeNoticeTime(match[2]),
+    });
+  }
+  return result;
+}
+
+function normalizeNoticeSubject(subject) {
+  const text = String(subject || "").trim();
+  if (!text) return "";
+  if (text.includes("语文")) return "语文";
+  if (text.includes("数学")) return "数学";
+  if (text.includes("物理") && text.includes("历史")) return "物理/历史";
+  if (text === "物理") return "物理/历史";
+  if (text === "历史") return "物理/历史";
+  if (text.includes("英语") || text.includes("外语")) return "外语";
+  if (text.includes("化学")) return "化学";
+  if (text.includes("地理")) return "地理";
+  if (text.includes("政治")) return "政治";
+  if (text.includes("生物")) return "生物";
+  if (text.includes("日语")) return "日语";
+  if (text.includes("俄语")) return "俄语";
+  if (text.includes("法语")) return "法语";
+  if (text.includes("西班牙语")) return "西班牙语";
+  if (text.includes("德语")) return "德语";
+  return text;
+}
+
+function normalizeNoticeTime(time) {
+  const normalized = String(time || "").trim().replace(/[点时]/g, ":").replace(/::+/g, ":").replace(/^(\d)$/g, "0$1:00").replace(/^(\d{1,2})$/, "$1:00").replace(/^(\d{1,2}):(\d)$/g, "$1:0$2");
+  const match = /^(\d{1,2}):(\d{2})$/.exec(normalized);
+  if (!match) return normalized;
+  return `${String(match[1]).padStart(2, "0")}:${match[2]}`;
+}
+
+function getNoticeDate(text) {
+  const normalized = String(text || "");
+  const fullDate = /(\d{4})年(\d{1,2})月(\d{1,2})日/.exec(normalized);
+  if (fullDate) return `${fullDate[1]}-${String(fullDate[2]).padStart(2, "0")}-${String(fullDate[3]).padStart(2, "0")}`;
+  const monthDay = /(\d{1,2})月(\d{1,2})日/.exec(normalized);
+  if (!monthDay) return "";
+  const year = new Date().getFullYear();
+  return `${year}-${String(monthDay[1]).padStart(2, "0")}-${String(monthDay[2]).padStart(2, "0")}`;
+}
+
+function dedupeExamTimes(items) {
+  const seen = new Set();
+  const normalized = [];
+  for (const item of items) {
+    const key = [item.subject, item.date, item.start, item.end].join("|");
+    if (seen.has(key)) continue;
+    seen.add(key);
+    normalized.push(item);
+  }
+  return normalized;
+}
+
+function mergeParsedExamTimes(existing, parsed) {
+  const map = new Map();
+  for (const item of existing || []) {
+    const key = String(item.subject || "");
+    map.set(key, { ...item });
+  }
+  for (const item of parsed || []) {
+    const key = String(item.subject || "");
+    map.set(key, { ...map.get(key), ...item });
+  }
+  return [...map.values()].filter((item) => item.subject || item.date || item.start || item.end);
+}
+
+function getEarliestExamDate(items) {
+  const dates = (items || []).map((item) => String(item.date || "")).filter(Boolean).sort();
+  return dates[0] || "";
 }
 
 function Step({ number, title, emoji, icon, status, note, issues = [], onIssueClick, children }) {
@@ -1727,6 +1994,36 @@ function buildLanguageStats(students, minorRooms) {
     }));
 }
 
+function buildMinorRoomRecommendation({ students, rooms, minorLanguages }) {
+  const enabledRooms = (rooms || [])
+    .filter((room) => room.enabled && room.roomNo)
+    .sort((a, b) => String(a.roomNo).localeCompare(String(b.roomNo), "zh-Hans-CN", { numeric: true }));
+  const englishCount = students.filter((student) => (student.language || "英语") === "英语").length;
+  let remaining = englishCount;
+  let englishRoomCount = 0;
+  for (const room of enabledRooms) {
+    if (remaining <= 0) break;
+    remaining -= Number(room.capacity) || 40;
+    englishRoomCount += 1;
+  }
+  const englishEndRoom = englishRoomCount ? enabledRooms[englishRoomCount - 1]?.roomNo : "无";
+  const startIndex = Math.min(englishRoomCount, enabledRooms.length);
+  const items = minorLanguages.map((language, index) => {
+    const room = enabledRooms[startIndex + index];
+    return {
+      language,
+      room,
+      count: students.filter((student) => student.language === language).length,
+    };
+  });
+  const summary = !students.length
+    ? "导入成绩单后自动计算英语占用范围。"
+    : remaining > 0
+      ? `英语 ${englishCount} 人，当前普通考场不足，暂不能推荐小语种考场。`
+      : `英语 ${englishCount} 人，预计使用 1-${englishEndRoom} 考场；小语种建议从下一考场开始。`;
+  return { englishCount, englishRoomCount, englishEndRoom, items, summary };
+}
+
 function buildRoomStats(rooms) {
   const enabled = rooms.filter((room) => room.enabled);
   const capacities = enabled.map((room) => Number(room.capacity) || 0);
@@ -1832,31 +2129,77 @@ function PreviewPanel({ tabs, activeKey, onChange }) {
   const [query, setQuery] = useState("");
   const [filters, setFilters] = useState({});
   const [expanded, setExpanded] = useState(false);
+  const [sheetQuery, setSheetQuery] = useState("");
+  const [selectedPaperKey, setSelectedPaperKey] = useState("");
+  const [showAllSheets, setShowAllSheets] = useState(true);
   const [printSettings, setPrintSettings] = useState({
     orientation: "landscape",
     fontSize: 11,
     rowHeight: 22,
     zoom: 92,
   });
+  const [sheetPrintSettings, setSheetPrintSettings] = useState(loadPreviewPrintSettings);
   useEffect(() => {
     setShowAll(false);
     setQuery("");
     setFilters({});
     setExpanded(false);
+    setSelectedPaperKey("");
+    setShowAllSheets(true);
     if (active) {
-      setPrintSettings(getA4PreviewSettings(active.label, (active.rows?.[0] && Object.keys(active.rows[0]).filter((column) => !column.startsWith("__")).length) || 0, active.rows?.length || 0));
+      setPrintSettings(
+        getA4PreviewSettings(
+          active.label,
+          (active.rows?.[0] && Object.keys(active.rows[0]).filter((column) => !column.startsWith("__"))) || [],
+          active.rows || [],
+        ),
+      );
     }
   }, [activeKey]);
   const activeRows = active?.rows || [];
   const columns = activeRows.length ? Object.keys(activeRows[0]) : [];
   const filterColumns = getPreviewFilterColumns(columns);
   const filteredRows = useMemo(() => filterTableRows(activeRows, query, filters), [activeRows, query, filters]);
+  const splitSheetPreview = isSplitSheetPreview(active?.label);
+  const rows = splitSheetPreview || expanded || showAll ? filteredRows : filteredRows.slice(0, 80);
+  const displayColumns = getPreviewDisplayColumns(active?.label, rows.length ? Object.keys(rows[0]) : columns);
+  const previewMeta = getPreviewSheetMeta(active?.label, displayColumns.length, rows.length);
+  const allPaperPages = buildPaperPreviewPages(active?.label, rows, displayColumns, printSettings, previewMeta);
+  const paperPageOptions = getPaperPageOptions(allPaperPages, sheetQuery);
+  const selectedPaperPage = allPaperPages.find((page) => page.key === selectedPaperKey);
+  const visiblePaperPages = selectedPaperPage
+    ? [selectedPaperPage]
+    : splitSheetPreview && !showAllSheets
+      ? paperPageOptions.slice(0, 1)
+      : paperPageOptions;
+  const currentPaperPage = selectedPaperPage || visiblePaperPages[0] || null;
+  const currentSheetTitle = currentPaperPage?.title || paperPageOptions[0]?.title || "";
+  const currentPrintKey = getPreviewPrintKey(active?.key || "__none__", currentPaperPage?.sheetKey || currentPaperPage?.key || "__all__");
+  const recommendedPrintSettings = getA4PreviewSettings(active?.label, displayColumns, currentPaperPage?.rows?.length ? currentPaperPage.rows : filteredRows);
+  const persistPrintSettings = (nextSettings) => {
+    setPrintSettings(nextSettings);
+    setSheetPrintSettings((current) => {
+      const next = { ...current, [currentPrintKey]: nextSettings };
+      localStorage.setItem("preview-print-settings", JSON.stringify(next));
+      return next;
+    });
+  };
+  const applyA4Fit = () => persistPrintSettings(recommendedPrintSettings);
+  const updatePrintPatch = (patch) => persistPrintSettings({ ...printSettings, ...patch });
+  const updatePrintSetting = (key, value, min, max) => {
+    const nextValue = clampNumber(value, min, max, printSettings[key]);
+    updatePrintPatch({ [key]: nextValue });
+  };
+  const stepPrintSetting = (key, delta, min, max) => {
+    updatePrintPatch({ [key]: clampNumber((Number(printSettings[key]) || 0) + delta, min, max, printSettings[key]) });
+  };
+  const sheetOptions = tabs;
+  useEffect(() => {
+    const saved = sheetPrintSettings[currentPrintKey];
+    const next = saved || recommendedPrintSettings;
+    setPrintSettings((current) => (samePrintSettings(current, next) ? current : next));
+  }, [currentPrintKey]);
   if (!active) return null;
-  const rows = expanded || showAll ? filteredRows : filteredRows.slice(0, 80);
-  const displayColumns = getPreviewDisplayColumns(active.label, rows.length ? Object.keys(rows[0]) : columns);
-  const previewMeta = getPreviewSheetMeta(active.label, displayColumns.length, rows.length);
-  const paperPages = buildPaperPreviewPages(active.label, rows, displayColumns, printSettings, previewMeta);
-  const applyA4Fit = () => setPrintSettings(getA4PreviewSettings(active.label, displayColumns.length, filteredRows.length));
   return (
     <div
       className={`preview-panel ${expanded ? "excel-mode" : ""}`}
@@ -1869,53 +2212,80 @@ function PreviewPanel({ tabs, activeKey, onChange }) {
       <div className="preview-sheet-meta">
         <div>
           <strong>{active.label}</strong>
-          <small>像查看 Excel 一样核对这一张表；可筛选、适配 A4、调整打印样式。</small>
+          <small>先选一张纸，再只调整这一张纸的打印样式。</small>
         </div>
         <span>{filteredRows.length}/{activeRows.length} 行</span>
       </div>
-      <div className="table-toolbar preview-toolbar">
-        <label className="table-search">
-          <Search size={15} />
-          <input value={query} placeholder="搜索当前表：姓名、考号、班级、考场..." onChange={(event) => setQuery(event.target.value)} />
-        </label>
-        {filterColumns.map((column) => (
-          <label className="table-filter" key={column}>
-            <Filter size={14} />
-            <select
-              value={filters[column] || ""}
-              onChange={(event) => setFilters((current) => ({ ...current, [column]: event.target.value }))}
-            >
-              <option value="">{column}</option>
-              {uniqueValues(activeRows.map((row) => row[column])).map((item) => <option key={item} value={item}>{item}</option>)}
+      <div className="paper-workbench-toolbar">
+        <div className="paper-toolbar-group paper-select-group">
+          <span>选纸</span>
+          <label className="table-filter sheet-picker">
+            <select value={active.key} onChange={(event) => { setSheetQuery(""); setSelectedPaperKey(""); onChange(event.target.value); }}>
+              {sheetOptions.map((item) => <option key={item.key} value={item.key}>{item.label}</option>)}
             </select>
           </label>
-        ))}
-        <button type="button" onClick={applyA4Fit}>适配 A4</button>
-        <label className="table-filter compact-control">
-          方向
-          <select value={printSettings.orientation} onChange={(event) => setPrintSettings((current) => ({ ...current, orientation: event.target.value }))}>
+          <label className="table-search sheet-jump">
+            <Search size={15} />
+            <input value={sheetQuery} placeholder="搜班级/科目/考场" onChange={(event) => { setSheetQuery(event.target.value); setSelectedPaperKey(""); setShowAllSheets(true); }} />
+          </label>
+          {allPaperPages.length > 1 && (
+            <label className="table-filter sheet-picker">
+              <select value={selectedPaperKey} onChange={(event) => setSelectedPaperKey(event.target.value)}>
+                <option value="">{showAllSheets ? `全部铺开（${paperPageOptions.length} 张）` : currentSheetTitle || `匹配 ${paperPageOptions.length} 张纸`}</option>
+                {paperPageOptions.map((page) => <option key={page.key} value={page.key}>{page.title}</option>)}
+              </select>
+            </label>
+          )}
+        </div>
+        <div className="paper-toolbar-group">
+          <span>查人</span>
+          <label className="table-search">
+            <Search size={15} />
+            <input value={query} placeholder="姓名/考号/班级/考场" onChange={(event) => setQuery(event.target.value)} />
+          </label>
+          {filterColumns.map((column) => (
+            <label className="table-filter" key={column}>
+              <Filter size={14} />
+              <select
+                value={filters[column] || ""}
+                onChange={(event) => setFilters((current) => ({ ...current, [column]: event.target.value }))}
+              >
+                <option value="">{column}</option>
+                {uniqueValues(activeRows.map((row) => row[column])).map((item) => <option key={item} value={item}>{item}</option>)}
+              </select>
+            </label>
+          ))}
+        </div>
+        <div className="paper-toolbar-group print-control-group">
+          <span>调纸</span>
+          <button type="button" onClick={applyA4Fit}>适配 A4</button>
+          <label className="table-filter compact-control">
+            方向
+            <select value={printSettings.orientation} onChange={(event) => updatePrintPatch({ orientation: event.target.value })}>
               <option value="landscape">横向</option>
               <option value="portrait">纵向</option>
             </select>
           </label>
-        <label className="table-filter compact-control">
-          字号
-          <input type="number" min="8" max="16" value={printSettings.fontSize} onChange={(event) => setPrintSettings((current) => ({ ...current, fontSize: Number(event.target.value) || current.fontSize }))} />
-        </label>
-        <label className="table-filter compact-control">
-          行高
-          <input type="number" min="16" max="36" value={printSettings.rowHeight} onChange={(event) => setPrintSettings((current) => ({ ...current, rowHeight: Number(event.target.value) || current.rowHeight }))} />
-        </label>
-        <label className="table-filter compact-control">
-          缩放
-          <input type="number" min="55" max="120" value={printSettings.zoom} onChange={(event) => setPrintSettings((current) => ({ ...current, zoom: Number(event.target.value) || current.zoom }))} />
-        </label>
-        <button type="button" className="icon-button" onClick={() => setExpanded((value) => !value)} title={expanded ? "退出 Excel 预览" : "打开 Excel 预览"}>
-          {expanded ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
-        </button>
+          <button type="button" className="soft-button" onClick={applyA4Fit}>
+            推荐{recommendedPrintSettings.orientation === "portrait" ? "竖向" : "横向"}
+          </button>
+          <PreviewStepper label="字号" value={printSettings.fontSize} min={8} max={28} step={1} onDecrease={() => stepPrintSetting("fontSize", -1, 8, 28)} onIncrease={() => stepPrintSetting("fontSize", 1, 8, 28)} onChange={(value) => updatePrintSetting("fontSize", value, 8, 28)} />
+          <PreviewStepper label="行高" value={printSettings.rowHeight} min={12} max={72} step={1} onDecrease={() => stepPrintSetting("rowHeight", -1, 12, 72)} onIncrease={() => stepPrintSetting("rowHeight", 1, 12, 72)} onChange={(value) => updatePrintSetting("rowHeight", value, 12, 72)} />
+          <PreviewStepper label="缩放" value={printSettings.zoom} min={55} max={120} suffix="%" onDecrease={() => stepPrintSetting("zoom", -5, 55, 120)} onIncrease={() => stepPrintSetting("zoom", 5, 55, 120)} onChange={(value) => updatePrintSetting("zoom", value, 55, 120)} />
+          <button type="button" className="icon-button" onClick={() => setExpanded((value) => !value)} title={expanded ? "退出 Excel 预览" : "打开 Excel 预览"}>
+            {expanded ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+          </button>
+        </div>
+        {splitSheetPreview && allPaperPages.length > 1 && (
+          <button type="button" className="paper-toggle-button" onClick={() => { setSelectedPaperKey(""); setShowAllSheets((value) => !value); }}>
+            {showAllSheets ? "只看当前纸" : `展开全部 ${paperPageOptions.length} 张`}
+          </button>
+        )}
       </div>
       <div className="preview-note">
-        {active.label}：筛选后 {filteredRows.length}/{activeRows.length} 行，当前显示 {rows.length} 行。
+        {active.label}：当前在看 {currentSheetTitle || active.label}。
+        {splitSheetPreview && !showAllSheets && !selectedPaperKey && currentSheetTitle && <span className="preview-current-sheet">当前 sheet：{currentSheetTitle}</span>}
+        {currentPaperPage && <span className="preview-current-sheet">当前设置作用于：{currentSheetTitle || "当前页"} · {printSettings.orientation === "portrait" ? "竖向" : "横向"}</span>}
         {filteredRows.length > 80 && (
           <button type="button" className="link-button" onClick={() => setShowAll(!showAll)}>
             {showAll ? "收起到前80行" : "显示全部"}
@@ -1929,11 +2299,16 @@ function PreviewPanel({ tabs, activeKey, onChange }) {
       <div className={`excel-canvas ${printSettings.orientation}`}>
         <div className="excel-ribbon">
           <span>{active.label}</span>
-          <small>A4 {printSettings.orientation === "landscape" ? "横向" : "纵向"} · {printSettings.fontSize}px · 行高 {printSettings.rowHeight}px · {printSettings.zoom}% · {paperPages.length} 页</small>
+          <small>A4 {printSettings.orientation === "landscape" ? "横向" : "纵向"} · {printSettings.fontSize}px · 行高 {printSettings.rowHeight}px · {printSettings.zoom}% · {visiblePaperPages.length}/{allPaperPages.length} 页</small>
         </div>
         <div className="excel-pages">
-          {paperPages.map((page) => (
-            <div className={`excel-page ${printSettings.orientation}`} key={page.key} onDoubleClick={() => setExpanded(true)}>
+          {visiblePaperPages.length === 0 && (
+            <div className={`excel-page ${printSettings.orientation}`}>
+              <div className="preview-empty-sheet">没有匹配到 sheet，换个班级、科目或考场号试试。</div>
+            </div>
+          )}
+          {visiblePaperPages.map((page) => (
+            <div className={`excel-page ${getPagePrintSettings(active.key, page, printSettings, sheetPrintSettings).orientation}`} key={page.key} onDoubleClick={() => setExpanded(true)}>
               <div className="preview-print-title">{page.title}</div>
               {page.note && <div className="preview-print-note">{page.note}</div>}
               <div className={`table-wrap preview-table ${expanded ? "expanded" : ""}`}>
@@ -1950,11 +2325,71 @@ function PreviewPanel({ tabs, activeKey, onChange }) {
                   </tbody>
                 </table>
               </div>
-              <div className="preview-page-footer">第 {page.pageNumber} / {paperPages.length} 页</div>
+              <div className="preview-page-footer">第 {page.pageNumber} / {allPaperPages.length} 页</div>
             </div>
           ))}
         </div>
       </div>
+    </div>
+  );
+}
+
+function getPaperPageOptions(pages, query) {
+  const term = String(query || "").trim().toLowerCase();
+  if (!term) return pages;
+  return pages.filter((page) => [page.title, page.note, page.key].some((value) => String(value || "").toLowerCase().includes(term)));
+}
+
+function loadPreviewPrintSettings() {
+  try {
+    return JSON.parse(localStorage.getItem("preview-print-settings") || "{}");
+  } catch {
+    return {};
+  }
+}
+
+function getPreviewPrintKey(tabKey, pageKey) {
+  return `${tabKey}:${pageKey}`;
+}
+
+function getPagePrintSettings(tabKey, page, fallback, settings = {}) {
+  return settings[getPreviewPrintKey(tabKey, page.sheetKey || page.key)] || fallback;
+}
+
+function samePrintSettings(a, b) {
+  return a?.orientation === b?.orientation && a?.fontSize === b?.fontSize && a?.rowHeight === b?.rowHeight && a?.zoom === b?.zoom;
+}
+
+function isSplitSheetPreview(label) {
+  const text = String(label || "");
+  return !["校验报告", "考试时间", "门牌人数总览", "管理总表"].some((item) => text.includes(item));
+}
+
+function clampNumber(value, min, max, fallback) {
+  const number = Number(value);
+  const base = Number.isFinite(number) ? number : fallback;
+  return Math.min(max, Math.max(min, base));
+}
+
+function PreviewStepper({ label, value, min, max, suffix = "", onDecrease, onIncrease, onChange }) {
+  const handleClick = (event, action) => {
+    event.preventDefault();
+    event.stopPropagation();
+    action();
+  };
+  return (
+    <div className="preview-stepper" aria-label={label}>
+      <span>{label}</span>
+      <button type="button" onClick={(event) => handleClick(event, onDecrease)} disabled={value <= min} aria-label={`${label}减小`}>-</button>
+      <input
+        type="number"
+        min={min}
+        max={max}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+      />
+      {suffix && <em>{suffix}</em>}
+      <button type="button" onClick={(event) => handleClick(event, onIncrease)} disabled={value >= max} aria-label={`${label}增大`}>+</button>
     </div>
   );
 }
@@ -1971,6 +2406,12 @@ function getPreviewSheetMeta(label, columnCount, rowCount) {
     return {
       title: "班主任考场安排",
       note: "说明：语数物/座位号、语数历/座位号、外语、化学、地理、政治、生物均为“考场/座位号”；黄色底色表示该科为自习安排。",
+    };
+  }
+  if (String(label || "").includes("外语")) {
+    return {
+      title: "外语安排",
+      note: "英语和各小语种分开看；当前页的方向只作用于这一种语种。",
     };
   }
   if (String(label || "").includes("考场信息")) {
@@ -2006,6 +2447,7 @@ function buildPaperPreviewPages(label, rows, columns, settings, meta) {
     chunks.forEach((chunk, chunkIndex) => {
       pages.push({
         key: `${group.key}-${chunkIndex}`,
+        sheetKey: group.key,
         title: group.title || meta.title,
         note: group.note || meta.note,
         rows: chunk,
@@ -2014,11 +2456,35 @@ function buildPaperPreviewPages(label, rows, columns, settings, meta) {
       });
     });
   }
-  return pages.length ? pages : [{ key: "empty", title: meta.title, note: meta.note, rows: [], pageNumber: 1, columns }];
+  return pages.length ? pages : [{ key: "empty", sheetKey: "empty", title: meta.title, note: meta.note, rows: [], pageNumber: 1, columns }];
 }
 
 function groupRowsForPreviewPages(label, rows) {
   const text = String(label || "");
+  if (text.includes("语数物/历")) {
+    return groupRowsBy(rows, "考场号", (group) => ({
+      title: `语数物历-${group}考场`,
+      note: "主考按考场拆纸，当前页设置只影响这一考场。",
+    }));
+  }
+  if (text.includes("外语")) {
+    return groupRowsBy(rows, "__paperGroup", (group) => {
+      const [language = "外语", room = ""] = String(group).split("|");
+      return {
+        title: `${language}-${room}考场`,
+        note: language === "英语" ? "英语按考场拆纸。" : `${language}单独安排；当前页只影响这一考场。`,
+      };
+    });
+  }
+  if (["化学", "地理", "政治", "生物"].some((subject) => text === subject)) {
+    return groupRowsBy(rows, "__paperGroup", (group) => {
+      const [subject = text, type = "", room = ""] = String(group).split("|");
+      return {
+        title: `${subject}-${room}${type === "自习" ? "自习" : "考场"}`,
+        note: type === "自习" ? "这是一张自习安排纸，可单独调打印样式。" : "这是一张考试安排纸，可单独调打印样式。",
+      };
+    });
+  }
   if (text.includes("班主任")) {
     return groupRowsBy(rows, "__pageGroup", (group) => ({
       title: `${group}考场安排`,
@@ -2037,7 +2503,7 @@ function groupRowsForPreviewPages(label, rows) {
 function groupRowsBy(rows, field, metaFactory) {
   const groups = new Map();
   for (const row of rows) {
-    const key = String(row[field] || "未分组");
+    const key = String(row[field] || row.__pageGroup || row.__paperGroup || "未分组");
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(row);
   }
@@ -2066,13 +2532,12 @@ function chunkRows(rows, size) {
   return chunks;
 }
 
-function getA4PreviewSettings(label, columnCount, rowCount) {
+function getA4PreviewSettings(label, columns = [], rows = []) {
   const isRoom = String(label || "").includes("考场信息");
   const isClass = String(label || "").includes("班主任");
   const isTime = String(label || "").includes("考试时间");
   const isDoor = String(label || "").includes("门牌");
-  const wide = columnCount >= 9 || isClass || isDoor;
-  const dense = rowCount > 42 || isRoom;
+  const estimated = estimatePreviewPageFit(label, columns, rows);
   if (isTime) {
     return {
       orientation: "portrait",
@@ -2082,11 +2547,91 @@ function getA4PreviewSettings(label, columnCount, rowCount) {
     };
   }
   return {
-    orientation: wide ? "landscape" : "portrait",
-    fontSize: dense ? 9 : wide ? 10 : 11,
-    rowHeight: dense ? 16 : 20,
-    zoom: isRoom ? 88 : wide ? 86 : 94,
+    orientation: estimated.orientation,
+    fontSize: estimated.fontSize,
+    rowHeight: estimated.rowHeight,
+    zoom: estimated.zoom,
   };
+}
+
+function estimatePreviewPageFit(label, columns, rows) {
+  const paper = String(label || "");
+  const portrait = estimatePaperNeed(paper, "portrait", columns, rows);
+  const landscape = estimatePaperNeed(paper, "landscape", columns, rows);
+  const portraitFits = portrait.widthFit && portrait.heightFit;
+  const landscapeFits = landscape.widthFit && landscape.heightFit;
+  if (portraitFits && !landscapeFits) return portrait;
+  if (landscapeFits && !portraitFits) return landscape;
+  if (portraitFits && landscapeFits) return portrait.score <= landscape.score ? portrait : landscape;
+  return portrait.score <= landscape.score ? portrait : landscape;
+}
+
+function estimatePaperNeed(label, orientation, columns, rows) {
+  const columnCount = columns.length;
+  const rowCount = rows.length;
+  const pageWidth = orientation === "portrait" ? 595 : 842;
+  const pageHeight = orientation === "portrait" ? 842 : 595;
+  const margins = 40;
+  const usableWidth = pageWidth - margins * 2;
+  const usableHeight = pageHeight - margins * 2;
+  const titleHeight = String(label || "").includes("考试时间") ? 72 : 46;
+  const noteHeight = String(label || "").includes("校验") ? 22 : 18;
+  const headerHeight = 26;
+  const rowHeight = guessPreviewRowHeight(label, rowCount, orientation);
+  const widthNeeded = estimatePreviewWidth(label, columns, rows, orientation);
+  const heightNeeded = titleHeight + noteHeight + headerHeight + rowHeight * Math.max(1, rowCount);
+  return {
+    orientation,
+    widthFit: widthNeeded <= usableWidth,
+    heightFit: heightNeeded <= usableHeight,
+    score: Math.max(widthNeeded / usableWidth, heightNeeded / usableHeight),
+    fontSize: orientation === "portrait" ? (columnCount > 8 ? 9 : 10) : (columnCount > 10 ? 9 : 10),
+    rowHeight: orientation === "portrait" ? (rowCount > 40 ? 15 : 18) : (rowCount > 34 ? 14 : 17),
+    zoom: orientation === "portrait" ? (columnCount > 8 ? 92 : 96) : (columnCount > 10 ? 84 : 88),
+  };
+}
+
+function estimatePreviewWidth(label, columns = [], rows = [], orientation) {
+  const textHeavy = String(label || "").includes("班主任") || String(label || "").includes("考场信息");
+  const perChar = orientation === "portrait" ? 7.2 : 7.0;
+  const padding = orientation === "portrait" ? 20 : 18;
+  const columnPadding = orientation === "portrait" ? 8 : 6;
+  let total = 0;
+  for (const column of columns) {
+    const sample = rows.slice(0, 36).reduce((max, row) => Math.max(max, String(row?.[column] ?? "").length), String(column).length);
+    const weight = getColumnWeight(column, textHeavy);
+    const contentWidth = Math.max(weight, sample) * perChar + columnPadding;
+    total += contentWidth;
+  }
+  return Math.max(160, total + padding * 2);
+}
+
+function getColumnWeight(column, textHeavy) {
+  const label = String(column || "");
+  if (label.includes("序号")) return 4;
+  if (label.includes("日期")) return 10;
+  if (label.includes("时间")) return 14;
+  if (label.includes("考号")) return 14;
+  if (label.includes("姓名")) return 6;
+  if (label.includes("班级")) return 6;
+  if (label.includes("科目")) return 8;
+  if (label.includes("座位")) return 7;
+  if (label.includes("考场")) return 8;
+  if (label.includes("门牌")) return 6;
+  if (label.includes("状态")) return 6;
+  if (label.includes("外语")) return 8;
+  if (label.includes("组合")) return 10;
+  if (label.includes("排名")) return 7;
+  if (label.includes("总分")) return 7;
+  if (textHeavy) return 9;
+  return 8;
+}
+
+function guessPreviewRowHeight(label, rowCount, orientation) {
+  if (String(label || "").includes("考试时间")) return orientation === "portrait" ? 26 : 24;
+  if (String(label || "").includes("班主任")) return rowCount > 45 ? 14 : 15;
+  if (String(label || "").includes("考场信息")) return rowCount > 42 ? 14 : 15;
+  return rowCount > 50 ? 14 : 16;
 }
 
 function getPreviewFilterColumns(columns) {
@@ -2116,11 +2661,11 @@ function buildPreviewTabs(schedule, rooms, scheduleMode, validationReport = []) 
     { key: "classes", label: "班主任表", rows: classRows },
     { key: "roomDetails", label: "考场信息表", rows: buildRoomPreviewRows(schedule) },
     { key: "main", label: "语数物/历", rows: assignmentRows(schedule.mainAssignments, { publicOnly: true }) },
-    { key: "foreign", label: "外语", rows: assignmentRows(schedule.foreignAssignments, { publicOnly: true }) },
+    { key: "foreign", label: "外语", rows: assignmentRows(schedule.foreignAssignments, { publicOnly: true, paperGroup: "foreign" }) },
   ];
   if (scheduleMode === SCHEDULE_MODES.THREE_DAY_SPLIT) {
     for (const subject of ["化学", "地理", "政治", "生物"]) {
-      tabs.push({ key: subject, label: subject, rows: buildSubjectPrintRows(schedule, subject) });
+      tabs.push({ key: subject, label: subject, rows: buildSubjectRowsForPreview(schedule, subject) });
     }
   } else {
     tabs.push({ key: "elective", label: "四选二", rows: assignmentRows(schedule.electiveAssignments, { publicOnly: true }) });
@@ -2156,7 +2701,7 @@ function buildDoorRowsForPreview(schedule, rooms) {
       地理: subjectRows("地理").length || "",
       政治: subjectRows("政治").length || "",
       生物: subjectRows("生物").length || "",
-      四选二: elective.length || "",
+      四选二: describePreviewAssignments(elective),
       人数: room.capacity,
       "__selfStudy:化学": isSelfStudySubjectRoom("化学"),
       "__selfStudy:地理": isSelfStudySubjectRoom("地理"),
@@ -2164,6 +2709,16 @@ function buildDoorRowsForPreview(schedule, rooms) {
       "__selfStudy:生物": isSelfStudySubjectRoom("生物"),
     };
   }).filter((row) => row.语数物历 || row.外语 || row.化学 || row.地理 || row.政治 || row.生物 || row.四选二);
+}
+
+function describePreviewAssignments(assignments = []) {
+  const counter = new Map();
+  for (const item of assignments) {
+    const key = item.subjectLabel || item.plan || "";
+    if (!key) continue;
+    counter.set(key, (counter.get(key) || 0) + 1);
+  }
+  return [...counter.entries()].map(([key, count]) => `${key}${count}`).join("+");
 }
 
 function buildClassPreviewRows(rows) {
@@ -2182,6 +2737,24 @@ function buildRoomPreviewRows(schedule) {
       __pageGroup: group,
       __selfStudy: row.当科 === "自习",
       ...printRow,
+    };
+  });
+}
+
+function buildSubjectRowsForPreview(schedule, subject) {
+  return buildSubjectPrintRows(schedule, subject).map((row) => {
+    const raw = schedule.subjectAssignments.find((item) =>
+      item.subjectLabel === subject &&
+      item.studentId === row.考号 &&
+      String(item.roomNo) === String(row.考场号) &&
+      Number(item.seatNo) === Number(row.座位号)
+    );
+    const type = raw?.status || row.当科 || "考试";
+    return {
+      __paperGroup: `${subject}|${type}|${row.考场号}`,
+      __selfStudy: type === "自习",
+      ...row,
+      当科: type === "自习" ? "自习" : subject,
     };
   });
 }
@@ -2384,6 +2957,7 @@ function searchStudents(rows, query) {
 
 function assignmentRows(assignments, options = {}) {
   return assignments.map((item) => ({
+    ...(options.paperGroup === "foreign" ? { __paperGroup: `${item.subjectLabel || item.language || "外语"}|${item.roomNo}` } : {}),
     考试类型: item.plan === "主考" ? "语数物历" : item.plan,
     考场号: item.status === "自习" ? `${item.roomNo}自习室` : item.roomNo,
     门牌号: item.doorNo,

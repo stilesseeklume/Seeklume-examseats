@@ -1,5 +1,6 @@
 import {
   buildPrintRows,
+  buildRoomSummaryRows,
   buildRoomPrintRows,
   buildSchedule,
   buildSubjectPrintRows,
@@ -67,6 +68,7 @@ const splitSchedule = buildSchedule({
 assertEqual(comboSchedule.errors.length, 0, `两天组合生成错误：${comboSchedule.errors.join(";")}`);
 assertEqual(splitSchedule.errors.length, 0, `三天拆分生成错误：${splitSchedule.errors.join(";")}`);
 assertNoMixedPhysicsHistory(comboSchedule.mainAssignments);
+assertTwoDayComboSummary(comboSchedule);
 
 for (const subject of ELECTIVE_SUBJECTS) {
   const rows = splitSchedule.subjectAssignments.filter((item) => item.subjectLabel === subject);
@@ -83,7 +85,6 @@ assertSelfStudyRoomsAreNumeric(buildPrintRows(splitSchedule.allRows));
 const validationReport = buildValidationReport({ schedule: splitSchedule, rooms, importErrors: [] });
 const validationSummary = summarizeValidationReport(validationReport);
 assertEqual(validationSummary.blockers, 0, "公开样例阻断错误数");
-
 console.log("规则验证通过");
 console.log({
   physics: physics.students.length,
@@ -159,5 +160,16 @@ function assertSelfStudyRoomsAreNumeric(rows) {
     .filter((value) => String(value).includes("自习"));
   if (selfStudyCells.length) {
     throw new Error("教师打印表自习考场应只显示数字，不应保留“自习室”字样");
+  }
+}
+
+function assertTwoDayComboSummary(schedule) {
+  const summaryRows = buildRoomSummaryRows(schedule, rooms);
+  const mixed = summaryRows.find((row) => String(row.四选二内容 || "").includes("+"));
+  if (!mixed) {
+    throw new Error("两天组合模式下应能在考场汇总/门牌说明中显示混合组合人数");
+  }
+  if (!/化学|地理|政治|生物/.test(String(mixed.四选二内容))) {
+    throw new Error(`四选二混合组合说明不清楚：${mixed.四选二内容}`);
   }
 }
