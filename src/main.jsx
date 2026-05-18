@@ -535,15 +535,16 @@ function App() {
       emoji: "🏫",
       icon: <ClipboardList size={18} />,
       status: hasStarted && rooms.filter((room) => room.enabled).length ? "done" : "idle",
-      note: "维护普通考场、门牌和容量。",
+      note: "先准备本次可用教室；尾场不满40人是正常排座结果。",
       content: (
         <>
           <RoomFixPanel errors={roomConflictErrors} duplicateDoorNos={duplicateDoorNos} conflictDoorNos={conflictDoorNos} onGoMinor={() => setActiveStep(2)} />
           <div className="toolbar">
-            <FilePicker compact title="导入旧门牌表" onFile={handleRoomFile} />
-            <button type="button" onClick={() => setRoomsAndStore(defaultRooms())}>套用默认22考场模板</button>
+            <FilePicker compact title="导入考场模板" hint="读取考场号、门牌、教室、容量" onFile={handleRoomFile} />
+            <button type="button" onClick={() => setRoomsAndStore(defaultRooms())}>生成22个40人考场</button>
             <button type="button" onClick={addRoom}>新增考场</button>
           </div>
+          <p className="step-help">考场容量表示最多可坐人数。排座时最后一个考场可能不满员，这是正常的；容量不足时才需要新增考场或调整容量。</p>
           <div className="table-wrap room-table">
             <table>
               <thead>
@@ -745,7 +746,6 @@ function App() {
       <header className="marketing-nav">
         <div>
           <strong>Seeklume ExamSeats</strong>
-          <span>大型考试排座与考务打印</span>
         </div>
         <button type="button" className="nav-link" onClick={() => setShowAbout(true)}><Info size={16} /> 隐私与开源</button>
       </header>
@@ -759,59 +759,42 @@ function App() {
           </div>
         </div>
       </section>
-      <section className="local-records-panel" aria-label="本机历史记录">
-        <div className="records-heading">
-          <div>
-            <h2>本机历史记录</h2>
-            <p>只读取当前浏览器的本地记录。换设备、换浏览器或清理缓存后，这里可能看不到旧考试。</p>
+      {records.length > 0 && (
+        <section className="local-records-panel" aria-label="本机历史记录">
+          <div className="records-heading">
+            <div>
+              <h2>本机历史记录</h2>
+              <p>只读取当前浏览器的本地记录。换设备、换浏览器或清理缓存后，这里可能看不到旧考试。</p>
+            </div>
+            <div className="record-toolbar">
+              <label className="record-search">
+                <Search size={15} />
+                <input value={recordFilter} placeholder="搜索考试名称/日期/版本" onChange={(event) => setRecordFilter(event.target.value)} />
+              </label>
+              <button type="button" onClick={clearLocalData}><Trash2 size={16} /> 清空本机数据</button>
+            </div>
           </div>
-          <div className="record-toolbar">
-            <label className="record-search">
-              <Search size={15} />
-              <input value={recordFilter} placeholder="搜索考试名称/日期/版本" onChange={(event) => setRecordFilter(event.target.value)} />
-            </label>
-            <button type="button" onClick={clearLocalData}><Trash2 size={16} /> 清空本机数据</button>
-          </div>
-        </div>
-        {filteredRecords.length ? (
-          <div className="record-list">
-            {filteredRecords.slice(0, 8).map((record) => (
-              <article className="record-card" key={record.id}>
-                <div>
-                  <strong>{record.examName || "未命名考试"}</strong>
-                  <span>{record.examDate || "未设置日期"} · 第 {record.version || 1} 版 · {formatRecordTime(record.createdAt)}</span>
-                </div>
-                <div className="record-actions">
-                  <button type="button" onClick={() => openRecord(record)}>打开</button>
-                  <button type="button" onClick={() => exportRecord(record)}><Download size={16} /> 导出</button>
-                  <button type="button" onClick={() => removeRecord(record.id)}><Trash2 size={16} /> 删除</button>
-                </div>
-              </article>
-            ))}
-          </div>
-        ) : (
-          <div className="empty local-empty">
-            {records.length ? "没有匹配的本机历史记录。" : "还没有本机历史。完成排考后，在导出页点击“保存到本机历史”即可回看。"}
-          </div>
-        )}
-      </section>
-      <section className="marketing-features">
-        <article>
-          <span>🔒</span>
-          <h3>本机优先</h3>
-          <p>不登录、不上传、不做云端同步。学生名单、排座结果和历史记录只保存在当前浏览器。</p>
-        </article>
-        <article>
-          <span>📂</span>
-          <h3>导入成绩单</h3>
-          <p>物理类、历史类分别导入，字段自动识别，也能适配更多原始表格式。</p>
-        </article>
-        <article>
-          <span>🧭</span>
-          <h3>先校验再导出</h3>
-          <p>漏排、重复、容量、同一时段教室冲突都会在导出前拦住。</p>
-        </article>
-      </section>
+          {filteredRecords.length ? (
+            <div className="record-list">
+              {filteredRecords.slice(0, 8).map((record) => (
+                <article className="record-card" key={record.id}>
+                  <div>
+                    <strong>{record.examName || "未命名考试"}</strong>
+                    <span>{record.examDate || "未设置日期"} · 第 {record.version || 1} 版 · {formatRecordTime(record.createdAt)}</span>
+                  </div>
+                  <div className="record-actions">
+                    <button type="button" onClick={() => openRecord(record)}>打开</button>
+                    <button type="button" onClick={() => exportRecord(record)}><Download size={16} /> 导出</button>
+                    <button type="button" onClick={() => removeRecord(record.id)}><Trash2 size={16} /> 删除</button>
+                  </div>
+                </article>
+              ))}
+            </div>
+          ) : (
+            <div className="empty local-empty">没有匹配的本机历史记录。</div>
+          )}
+        </section>
+      )}
       <footer className="brand-footer">© Seeklume ExamSeats · 本机排座工具 · 数据不出浏览器</footer>
       {showAbout && <AboutModal onClose={() => setShowAbout(false)} />}
     </main>
@@ -2884,7 +2867,7 @@ function createIssueRoute(message) {
     return issueRoute(2, "小语种", "💬", text, "设置小语种考场", text || "这里要补考场号、门牌号、教室");
   }
   if (text.includes("缺少普通考场清单")) {
-    return issueRoute(1, "考场", "🏫", text, "先导入旧门牌表或套用默认模板", "当前没有启用的普通考场，所以还不能计算容量和座位");
+    return issueRoute(1, "考场", "🏫", text, "先导入考场模板或生成默认考场", "当前没有启用的普通考场，所以还不能计算容量和座位");
   }
   if (text.includes("英语普通考场容量不足")) {
     return issueRoute(1, "考场", "🏫", text, "新增英语考场或扩大现有容量", text);

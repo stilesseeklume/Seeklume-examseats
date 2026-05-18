@@ -135,11 +135,6 @@ input:focus {
   color: var(--accent);
 }
 
-.marketing-nav span {
-  color: var(--text-2);
-  font-size: 13px;
-}
-
 .marketing-nav div:not(:first-child) {
   display: flex;
   gap: 10px;
@@ -240,46 +235,6 @@ input:focus {
   font-weight: 800;
   font-size: 16px;
   letter-spacing: -0.4px;
-}
-
-.marketing-features {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 14px;
-  margin-top: 34px;
-  width: min(1100px, 100%);
-}
-
-.marketing-features article {
-  border: 1px solid var(--border);
-  border-radius: 16px;
-  background: rgba(255, 255, 255, 0.74);
-  padding: 22px;
-  min-height: 180px;
-  box-shadow: 0 16px 38px rgba(15, 23, 42, 0.05);
-}
-
-.marketing-features span {
-  display: inline-flex;
-  width: 36px;
-  height: 36px;
-  align-items: center;
-  justify-content: center;
-  border-radius: 12px;
-  background: var(--surface-2);
-  margin-bottom: 14px;
-  font-size: 20px;
-}
-
-.marketing-features h3 {
-  margin: 0 0 8px;
-  font-size: 18px;
-}
-
-.marketing-features p {
-  margin: 0;
-  color: var(--text-2);
-  line-height: 1.65;
 }
 
 .local-records-panel {
