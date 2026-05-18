@@ -744,19 +744,19 @@ function App() {
     <main className="app-shell home-shell">
       <header className="marketing-nav">
         <div>
-          <strong>Seeklume</strong>
-          <span>本地教育工具</span>
+          <strong>Seeklume ExamSeats</strong>
+          <span>大型考试排座与考务打印</span>
         </div>
         <button type="button" className="nav-link" onClick={() => setShowAbout(true)}><Info size={16} /> 隐私与版权</button>
       </header>
       <section className="home-hero">
         <div className="home-hero-copy fade-up">
-          <span className="status-note"><Sparkles size={13} /> 不登录 · 不上传 · 仅本机保存</span>
-          <h1>Seeklume 排考工具</h1>
-          <p className="home-sub">Seeklume 品牌下的本地排考子项目。导入成绩单，生成考场，检查冲突，然后直接导出能打印的 Excel；学生数据只留在当前浏览器。</p>
+          <span className="status-note"><Sparkles size={13} /> 不登录 · 不上传 · 不做云端同步</span>
+          <h1>ExamSeats 排座工具</h1>
+          <p className="home-sub">从成绩单到可打印考务材料，一次完成。导入物理类、历史类成绩单，自动排座、校验冲突、生成班主任表、考场信息表和门牌人数表。全程本机处理，学生数据只留在当前浏览器。</p>
           <div className="home-actions">
-            <button type="button" className="primary" onClick={newBlankExam}><FilePlus2 size={16} /> 开始排考</button>
-            <button type="button" onClick={() => setShowAbout(true)}><Info size={16} /> 查看说明</button>
+            <button type="button" className="primary" onClick={newBlankExam}><FilePlus2 size={16} /> 开始排座</button>
+            <button type="button" onClick={() => setShowAbout(true)}><Info size={16} /> 隐私与版权</button>
           </div>
         </div>
       </section>
@@ -798,29 +798,29 @@ function App() {
       </section>
       <section className="marketing-features">
         <article>
+          <span>🔒</span>
+          <h3>本机优先</h3>
+          <p>不登录、不上传、不做云端同步。学生名单、排座结果和历史记录只保存在当前浏览器。</p>
+        </article>
+        <article>
           <span>📂</span>
           <h3>导入成绩单</h3>
           <p>物理类、历史类分别导入，字段自动识别，也能适配更多原始表格式。</p>
         </article>
         <article>
-          <span>✅</span>
+          <span>🧭</span>
           <h3>先校验再导出</h3>
           <p>漏排、重复、容量、同一时段教室冲突都会在导出前拦住。</p>
         </article>
-        <article>
-          <span>📤</span>
-          <h3>直接给老师用</h3>
-          <p>年级总表、班主任表、考场信息表和门牌人数表按打印场景生成。</p>
-        </article>
       </section>
-      <footer className="brand-footer">© Seeklume · 本地排考工具 · 学生数据不上传云端</footer>
+      <footer className="brand-footer">© Seeklume ExamSeats · 本机排座工具 · 数据不出浏览器</footer>
       {showAbout && <AboutModal onClose={() => setShowAbout(false)} />}
     </main>
   ) : (
     <main className="app-shell">
       <header className="topbar">
         <div className="topbar-brand">
-          <span className="brand-logo">Seeklume</span>
+          <span className="brand-logo">Seeklume ExamSeats</span>
         </div>
         <div className={`dynamic-island ${visibleErrors.length ? "warning" : "ready"}`} role="status">
           <span className="island-emoji" aria-hidden="true">{visibleErrors.length ? "⚠️" : activeStepItem.emoji}</span>
@@ -946,8 +946,8 @@ function AboutModal({ onClose }) {
       <section className="about-card">
         <div className="about-head">
           <div>
-            <span>Seeklume Local Tool</span>
-            <h2>隐私与版权说明</h2>
+            <span>Seeklume ExamSeats</span>
+            <h2>隐私与版权</h2>
           </div>
           <button type="button" onClick={onClose}>关闭</button>
         </div>
@@ -965,7 +965,7 @@ function AboutModal({ onClose }) {
             <p>工具版权与品牌归 Seeklume 所有。未经允许，不得复制、二次分发或商用改造。</p>
           </article>
         </div>
-        <p className="about-note">Seeklume 提供工具，数据留在本机。</p>
+        <p className="about-note">数据只在本机，导出后由你自己掌握。</p>
       </section>
     </div>
   );

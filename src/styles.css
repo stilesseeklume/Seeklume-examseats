@@ -191,11 +191,29 @@ input:focus {
   pointer-events: none;
 }
 
+.status-note {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid rgba(34, 197, 94, 0.22);
+  border-radius: 999px;
+  background: rgba(236, 253, 245, 0.78);
+  color: #166534;
+  padding: 8px 14px;
+  font-size: 15px;
+  font-weight: 800;
+  position: relative;
+  z-index: 1;
+  box-shadow: 0 12px 30px rgba(22, 101, 52, 0.08);
+}
+
 .home-hero-copy h1 {
   margin: 10px 0 18px;
   font-size: clamp(54px, 7vw, 96px);
   line-height: 0.95;
   letter-spacing: -1px;
+  position: relative;
+  z-index: 1;
 }
 
 .home-sub {
@@ -204,6 +222,8 @@ input:focus {
   color: var(--text-2);
   font-size: clamp(18px, 2vw, 22px);
   line-height: 1.65;
+  position: relative;
+  z-index: 1;
 }
 
 .home-actions {
