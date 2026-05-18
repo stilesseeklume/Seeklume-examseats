@@ -1853,7 +1853,9 @@ function PreviewPanel({ tabs, activeKey, onChange }) {
   const filteredRows = useMemo(() => filterTableRows(activeRows, query, filters), [activeRows, query, filters]);
   if (!active) return null;
   const rows = expanded || showAll ? filteredRows : filteredRows.slice(0, 80);
-  const displayColumns = rows.length ? Object.keys(rows[0]).filter((column) => !column.startsWith("__")) : columns.filter((column) => !column.startsWith("__"));
+  const displayColumns = getPreviewDisplayColumns(active.label, rows.length ? Object.keys(rows[0]) : columns);
+  const previewMeta = getPreviewSheetMeta(active.label, displayColumns.length, rows.length);
+  const paperPages = buildPaperPreviewPages(active.label, rows, displayColumns, printSettings, previewMeta);
   const applyA4Fit = () => setPrintSettings(getA4PreviewSettings(active.label, displayColumns.length, filteredRows.length));
   return (
     <div
@@ -1927,27 +1929,141 @@ function PreviewPanel({ tabs, activeKey, onChange }) {
       <div className={`excel-canvas ${printSettings.orientation}`}>
         <div className="excel-ribbon">
           <span>{active.label}</span>
-          <small>A4 {printSettings.orientation === "landscape" ? "横向" : "纵向"} · {printSettings.fontSize}px · 行高 {printSettings.rowHeight}px · {printSettings.zoom}%</small>
+          <small>A4 {printSettings.orientation === "landscape" ? "横向" : "纵向"} · {printSettings.fontSize}px · 行高 {printSettings.rowHeight}px · {printSettings.zoom}% · {paperPages.length} 页</small>
         </div>
-        <div className={`excel-page ${printSettings.orientation}`} onDoubleClick={() => setExpanded(true)}>
-          <div className={`table-wrap preview-table ${expanded ? "expanded" : ""}`}>
-            <table>
-              <thead>
-                <tr>{displayColumns.map((column) => <th key={column}>{column}</th>)}</tr>
-              </thead>
-              <tbody>
-                {rows.map((row, index) => (
-                  <tr key={index}>
-                    {displayColumns.map((column) => <td key={column}>{row[column]}</td>)}
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+        <div className="excel-pages">
+          {paperPages.map((page) => (
+            <div className={`excel-page ${printSettings.orientation}`} key={page.key} onDoubleClick={() => setExpanded(true)}>
+              <div className="preview-print-title">{page.title}</div>
+              {page.note && <div className="preview-print-note">{page.note}</div>}
+              <div className={`table-wrap preview-table ${expanded ? "expanded" : ""}`}>
+                <table>
+                  <thead>
+                    <tr>{displayColumns.map((column) => <th key={column}>{column}</th>)}</tr>
+                  </thead>
+                  <tbody>
+                    {page.rows.map((row, index) => (
+                      <tr key={row.考号 ? `${row.考号}-${index}` : index}>
+                        {displayColumns.map((column) => <td className={row.__selfStudy || row[`__selfStudy:${column}`] ? "preview-self-study" : ""} key={column}>{row[column]}</td>)}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div className="preview-page-footer">第 {page.pageNumber} / {paperPages.length} 页</div>
+            </div>
+          ))}
         </div>
       </div>
     </div>
   );
+}
+
+function getPreviewDisplayColumns(label, columns) {
+  return columns
+    .filter((column) => !column.startsWith("__"))
+    .filter((column) => !(String(label || "").includes("班主任") && column === "班级分组"))
+    .filter((column) => !(String(label || "").includes("考场信息") && column === "科目"));
+}
+
+function getPreviewSheetMeta(label, columnCount, rowCount) {
+  if (String(label || "").includes("班主任")) {
+    return {
+      title: "班主任考场安排",
+      note: "说明：语数物/座位号、语数历/座位号、外语、化学、地理、政治、生物均为“考场/座位号”；黄色底色表示该科为自习安排。",
+    };
+  }
+  if (String(label || "").includes("考场信息")) {
+    return {
+      title: "考场信息表",
+      note: `${rowCount} 行 · ${columnCount} 列 · 预览按 A4 自动估算，导出 Excel 会再次写入打印页边距和缩放。`,
+    };
+  }
+  if (String(label || "").includes("门牌")) {
+    return {
+      title: "门牌人数总览",
+      note: "黄色底色表示该科该考场为自习室；无单独“自习室”列，避免重复占位。",
+    };
+  }
+  if (String(label || "").includes("考试时间")) {
+    return {
+      title: "考试时间表",
+      note: "导出时按 A4 纵向铺开，适合单独打印张贴或发给老师。",
+    };
+  }
+  return {
+    title: label || "预览表",
+    note: "",
+  };
+}
+
+function buildPaperPreviewPages(label, rows, columns, settings, meta) {
+  const rowsPerPage = getRowsPerPreviewPage(label, settings, Boolean(meta.note));
+  const grouped = groupRowsForPreviewPages(label, rows);
+  const pages = [];
+  for (const group of grouped) {
+    const chunks = chunkRows(group.rows, rowsPerPage);
+    chunks.forEach((chunk, chunkIndex) => {
+      pages.push({
+        key: `${group.key}-${chunkIndex}`,
+        title: group.title || meta.title,
+        note: group.note || meta.note,
+        rows: chunk,
+        pageNumber: pages.length + 1,
+        columns,
+      });
+    });
+  }
+  return pages.length ? pages : [{ key: "empty", title: meta.title, note: meta.note, rows: [], pageNumber: 1, columns }];
+}
+
+function groupRowsForPreviewPages(label, rows) {
+  const text = String(label || "");
+  if (text.includes("班主任")) {
+    return groupRowsBy(rows, "__pageGroup", (group) => ({
+      title: `${group}考场安排`,
+      note: "说明：语数物/座位号、语数历/座位号、外语、化学、地理、政治、生物均为“考场/座位号”；黄色底色表示该科为自习安排。",
+    }));
+  }
+  if (text.includes("考场信息")) {
+    return groupRowsBy(rows, "__pageGroup", (group) => ({
+      title: `${group}考场信息表`,
+      note: "",
+    }));
+  }
+  return [{ key: "all", title: "", note: "", rows }];
+}
+
+function groupRowsBy(rows, field, metaFactory) {
+  const groups = new Map();
+  for (const row of rows) {
+    const key = String(row[field] || "未分组");
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(row);
+  }
+  return [...groups.entries()].map(([key, groupRows]) => ({ key, rows: groupRows, ...metaFactory(key) }));
+}
+
+function getRowsPerPreviewPage(label, settings, hasNote) {
+  const pageHeight = settings.orientation === "landscape" ? 794 : 1123;
+  const verticalPadding = 60;
+  const titleHeight = 34;
+  const noteHeight = hasNote ? 26 : 0;
+  const headerHeight = 24;
+  const footerHeight = 24;
+  const available = pageHeight - verticalPadding - titleHeight - noteHeight - headerHeight - footerHeight;
+  const baseRows = Math.floor(available / Math.max(12, settings.rowHeight || 18));
+  if (String(label || "").includes("考场信息")) return Math.max(22, Math.min(baseRows, 42));
+  if (String(label || "").includes("班主任")) return Math.max(28, Math.min(baseRows, 48));
+  return Math.max(12, baseRows);
+}
+
+function chunkRows(rows, size) {
+  const chunks = [];
+  for (let index = 0; index < rows.length; index += size) {
+    chunks.push(rows.slice(index, index + size));
+  }
+  return chunks;
 }
 
 function getA4PreviewSettings(label, columnCount, rowCount) {
@@ -1994,10 +2110,11 @@ function buildPreviewTabs(schedule, rooms, scheduleMode, validationReport = []) 
   const classRows = buildClassPreviewRows(schedule.allRows);
   const tabs = [
     { key: "validation", label: "校验报告", rows: validationReport },
+    { key: "times", label: "考试时间", rows: buildTimeRowsForPreview(schedule.examTimes || []) },
     { key: "doors", label: "门牌人数总览", rows: buildDoorRowsForPreview(schedule, rooms) },
     { key: "admin", label: "管理总表", rows: buildAdminRows(schedule.allRows) },
     { key: "classes", label: "班主任表", rows: classRows },
-    { key: "roomDetails", label: "考场信息表", rows: buildRoomPrintRows(schedule) },
+    { key: "roomDetails", label: "考场信息表", rows: buildRoomPreviewRows(schedule) },
     { key: "main", label: "语数物/历", rows: assignmentRows(schedule.mainAssignments, { publicOnly: true }) },
     { key: "foreign", label: "外语", rows: assignmentRows(schedule.foreignAssignments, { publicOnly: true }) },
   ];
@@ -2009,6 +2126,17 @@ function buildPreviewTabs(schedule, rooms, scheduleMode, validationReport = []) 
     tabs.push({ key: "elective", label: "四选二", rows: assignmentRows(schedule.electiveAssignments, { publicOnly: true }) });
   }
   return tabs.filter((tab) => tab.rows.length);
+}
+
+function buildTimeRowsForPreview(examTimes = []) {
+  return examTimes
+    .filter((item) => item.subject || item.date || item.start || item.end)
+    .map((item, index) => ({
+      序号: index + 1,
+      科目: item.subject,
+      日期: item.date,
+      时间: [item.start, item.end].filter(Boolean).join("-"),
+    }));
 }
 
 function buildDoorRowsForPreview(schedule, rooms) {
@@ -2042,7 +2170,20 @@ function buildClassPreviewRows(rows) {
   return rows
     .slice()
     .sort((a, b) => String(a.班级).localeCompare(String(b.班级), "zh-Hans-CN", { numeric: true }) || String(a.考号).localeCompare(String(b.考号), "zh-Hans-CN", { numeric: true }))
-    .map((row) => ({ 班级分组: row.班级, ...buildPrintRows([row])[0] }));
+    .map((row) => ({ __pageGroup: row.班级, 班级分组: row.班级, ...buildPrintRows([row])[0] }));
+}
+
+function buildRoomPreviewRows(schedule) {
+  return buildRoomPrintRows(schedule).map((row) => {
+    const suffix = row.当科 === "自习" ? `${row.考场号}自习室` : row.考场号;
+    const group = `${row.科目}-${suffix}`;
+    const { 科目, ...printRow } = row;
+    return {
+      __pageGroup: group,
+      __selfStudy: row.当科 === "自习",
+      ...printRow,
+    };
+  });
 }
 
 function ValidationReport({ rows, summary }) {
@@ -2108,6 +2249,7 @@ function StudentSearch({ query, onQuery, rows }) {
           <table>
             <thead>
               <tr>
+                <th>班级</th>
                 <th>姓名</th>
                 <th>考号</th>
                 <th>语数物/历</th>
@@ -2124,7 +2266,7 @@ function StudentSearch({ query, onQuery, rows }) {
                   <td>{row.__className || ""}</td>
                   <td>{row.姓名}</td>
                   <td>{row.考号}</td>
-                  <td>{row.语数物历考场 ? `${row.语数物历考场}/${row.语数物历座位}` : ""}</td>
+                  <td>{row["语数物/座位号"] || row["语数历/座位号"] || ""}</td>
                   <td>{row.外语 || ""}</td>
                   <td>{row.化学 || ""}</td>
                   <td>{row.地理 || ""}</td>
@@ -2253,6 +2395,7 @@ function assignmentRows(assignments, options = {}) {
     首选科目: item.firstSubject,
     选科组合: item.comboRaw,
     外语语种: item.language,
+    __selfStudy: item.status === "自习",
     ...(options.publicOnly ? {} : { 状态: item.status || "", 该科分数: item.subjectScore ?? "" }),
   }));
 }
