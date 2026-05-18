@@ -747,7 +747,7 @@ function App() {
           <strong>Seeklume ExamSeats</strong>
           <span>大型考试排座与考务打印</span>
         </div>
-        <button type="button" className="nav-link" onClick={() => setShowAbout(true)}><Info size={16} /> 隐私与版权</button>
+        <button type="button" className="nav-link" onClick={() => setShowAbout(true)}><Info size={16} /> 隐私与开源</button>
       </header>
       <section className="home-hero">
         <div className="home-hero-copy fade-up">
@@ -756,7 +756,6 @@ function App() {
           <p className="home-sub">从成绩单到可打印考务材料，一次完成。导入物理类、历史类成绩单，自动排座、校验冲突、生成班主任表、考场信息表和门牌人数表。全程本机处理，学生数据只留在当前浏览器。</p>
           <div className="home-actions">
             <button type="button" className="primary" onClick={newBlankExam}><FilePlus2 size={16} /> 开始排座</button>
-            <button type="button" onClick={() => setShowAbout(true)}><Info size={16} /> 隐私与版权</button>
           </div>
         </div>
       </section>
@@ -942,12 +941,12 @@ function App() {
 
 function AboutModal({ onClose }) {
   return (
-    <div className="fullscreen-overlay about-overlay" role="dialog" aria-modal="true" aria-label="隐私与版权说明">
+    <div className="fullscreen-overlay about-overlay" role="dialog" aria-modal="true" aria-label="隐私与开源说明">
       <section className="about-card">
         <div className="about-head">
           <div>
             <span>Seeklume ExamSeats</span>
-            <h2>隐私与版权</h2>
+            <h2>隐私与开源</h2>
           </div>
           <button type="button" onClick={onClose}>关闭</button>
         </div>
@@ -961,8 +960,8 @@ function AboutModal({ onClose }) {
             <p>更换电脑、清理浏览器缓存、使用无痕模式或换域名访问，都可能导致历史不可见。长期备份请导出 Excel 自行保存。</p>
           </article>
           <article>
-            <strong>产权归属</strong>
-            <p>工具版权与品牌归 Seeklume 所有。未经允许，不得复制、二次分发或商用改造。</p>
+            <strong>开源许可</strong>
+            <p>项目代码按 MIT License 开源发布，可自由使用、复制、修改和分发；请保留许可证与必要署名。</p>
           </article>
         </div>
         <p className="about-note">数据只在本机，导出后由你自己掌握。</p>

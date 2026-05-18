@@ -47,3 +47,7 @@ npm run build
 本项目不包含真实成绩单、导出材料或个人隐私数据。`.gitignore` 默认忽略 Excel、CSV、ZIP、构建产物和本地依赖。
 
 真实考试数据请只保存在本机，不要提交到 GitHub。
+
+## 开源许可
+
+本项目使用 MIT License 开源发布。
