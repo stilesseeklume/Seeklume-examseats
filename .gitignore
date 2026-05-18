@@ -1,0 +1,22 @@
+node_modules/
+dist/
+.DS_Store
+
+# Local/private exam data and generated exports
+*.xls
+*.xlsx
+*.xlsm
+*.csv
+*.tsv
+*.zip
+exports/
+fixtures/private/
+
+# Local environment
+.env
+.env.*
+!.env.example
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*

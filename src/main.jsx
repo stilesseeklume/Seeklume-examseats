@@ -1,0 +1,2258 @@
+import React, { useEffect, useMemo, useState } from "react";
+import { createRoot } from "react-dom/client";
+import JSZip from "jszip";
+import {
+  AlertTriangle,
+  ArrowLeftRight,
+  ArrowRight,
+  BookOpenCheck,
+  CalendarDays,
+  Clock3,
+  FilePlus2,
+  Filter,
+  Maximize2,
+  Minimize2,
+  House,
+  Search,
+  CheckCircle2,
+  ClipboardList,
+  Download,
+  FileDown,
+  FileSpreadsheet,
+  Globe2,
+  History,
+  Info,
+  Plus,
+  School,
+  Sparkles,
+  Trash2,
+  Upload,
+  UsersRound,
+  Zap,
+} from "lucide-react";
+import {
+  buildRoomDetailRows,
+  buildAdminRows,
+  buildPrintRows,
+  buildRoomPrintRows,
+  buildRoomSummaryRows,
+  buildSubjectPrintRows,
+  buildValidationReport,
+  buildWorkbookFile,
+  buildSchedule,
+  buildExportJobs,
+  buildExportFileName,
+  DEFAULT_COMBO_ORDER,
+  defaultRooms,
+  deleteExamRecord,
+  ELECTIVE_SUBJECTS,
+  EXPORT_GROUPS,
+  exportWorkbook,
+  getElectiveSubjects,
+  LANGUAGE_SUBJECTS,
+  loadExamRecords,
+  saveExamRecord,
+  SCHEDULE_MODES,
+  summarizeValidationReport,
+} from "./scheduler.js";
+import { parseRoomImportSource, parseStudentImportSource } from "./importers.js";
+import "./styles.css";
+
+const TEMPLATE_TIMES = [
+  { subject: "语文", dayOffset: 0, start: "09:00", end: "11:30" },
+  { subject: "数学", dayOffset: 0, start: "15:00", end: "17:00" },
+  { subject: "物理/历史", dayOffset: 1, start: "09:00", end: "10:15" },
+  { subject: "外语", dayOffset: 1, start: "15:00", end: "17:00" },
+  { subject: "化学", dayOffset: 2, start: "08:30", end: "09:45" },
+  { subject: "地理", dayOffset: 2, start: "11:00", end: "12:15" },
+  { subject: "政治", dayOffset: 2, start: "14:30", end: "15:45" },
+  { subject: "生物", dayOffset: 2, start: "17:00", end: "18:15" },
+];
+
+const LOCAL_STORAGE_KEYS = [
+  "physics-import",
+  "history-import",
+  "exam-rooms",
+  "minor-language-rooms",
+  "exam-times",
+  "exam-date",
+  "schedule-mode",
+  "export-mode",
+  "exam-room-records",
+  "exam-workspace-draft",
+];
+
+function App() {
+  const workspaceDraft = loadWorkspaceDraft();
+  const [examName, setExamName] = useState(workspaceDraft?.examName || "高三大型考试");
+  const [examDate, setExamDate] = useState(workspaceDraft?.examDate || loadExamDate());
+  const [physics, setPhysics] = useState(() => workspaceDraft?.physics ? deserializePool(workspaceDraft.physics) : loadImportedPool("physics-import"));
+  const [history, setHistory] = useState(() => workspaceDraft?.history ? deserializePool(workspaceDraft.history) : loadImportedPool("history-import"));
+  const [rooms, setRooms] = useState(workspaceDraft?.rooms || loadRooms());
+  const [minorRooms, setMinorRooms] = useState(workspaceDraft?.minorRooms || loadMinorRooms());
+  const [scheduleMode, setScheduleMode] = useState(workspaceDraft?.scheduleMode || loadScheduleMode());
+  const [examTimes, setExamTimes] = useState(workspaceDraft?.examTimes || loadExamTimes(workspaceDraft?.examDate || loadExamDate()));
+  const [selected, setSelected] = useState({
+    grade: true,
+    classes: true,
+    subjectSheets: false,
+    roomSummary: false,
+    roomSheets: true,
+    doorSummary: true,
+    timeSheet: true,
+    ...(workspaceDraft?.selected || {}),
+  });
+  const [exportMode, setExportMode] = useState(workspaceDraft?.exportMode || loadExportMode());
+  const [records, setRecords] = useState(loadExamRecords());
+  const [savedMessage, setSavedMessage] = useState("");
+  const [previewKey, setPreviewKey] = useState(workspaceDraft?.previewKey || "print");
+  const [activeStep, setActiveStep] = useState(workspaceDraft?.activeStep ?? 0);
+  const [studentQuery, setStudentQuery] = useState("");
+  const [view, setView] = useState(workspaceDraft ? "workspace" : "home");
+  const [recordFilter, setRecordFilter] = useState("");
+  const [showAbout, setShowAbout] = useState(false);
+
+  const importErrors = [
+    ...physics.errors.map((error) => `物理类：${error}`),
+    ...history.errors.map((error) => `历史类：${error}`),
+  ];
+  const schedule = useMemo(
+    () =>
+      buildSchedule({
+        physicsStudents: physics.students,
+        historyStudents: history.students,
+        rooms,
+        minorLanguageRooms: minorRooms,
+        examTimes,
+        mode: scheduleMode,
+      }),
+    [physics.students, history.students, rooms, minorRooms, examTimes, scheduleMode],
+  );
+  const allErrors = [...importErrors, ...schedule.errors];
+  const validationReport = useMemo(() => buildValidationReport({ schedule, rooms, importErrors }), [schedule, rooms, importErrors]);
+  const validationSummary = useMemo(() => summarizeValidationReport(validationReport), [validationReport]);
+  const exportSummaryItems = useMemo(() => {
+    const items = ["校验报告（单独给自己）"];
+    if (selected.doorSummary) items.push("门牌人数总览");
+    if (selected.grade) items.push("管理总表");
+    if (selected.classes) items.push("班主任表");
+    if (selected.roomSheets) items.push("考场信息表");
+    if (selected.timeSheet) items.push("考试时间表");
+    if (selected.subjectSheets && schedule.mode === SCHEDULE_MODES.THREE_DAY_SPLIT) items.push("科目总表");
+    if (selected.roomSummary) items.push("考务汇总");
+    return items;
+  }, [selected, schedule.mode]);
+  const studentSearchRows = useMemo(() => searchStudents(schedule.allRows, studentQuery), [schedule.allRows, studentQuery]);
+  const minorLanguages = useMemo(() => {
+    const langs = new Set([...physics.students, ...history.students].map((student) => student.language).filter((language) => language !== "英语"));
+    return LANGUAGE_SUBJECTS.filter((language) => langs.has(language));
+  }, [physics.students, history.students]);
+  const foreignLanguages = useMemo(() => {
+    const langs = new Set([...physics.students, ...history.students].map((student) => student.language || "英语"));
+    if (physics.students.length || history.students.length) langs.add("英语");
+    return ["英语", ...LANGUAGE_SUBJECTS].filter((language) => langs.has(language));
+  }, [physics.students, history.students]);
+  const previewTabs = useMemo(() => buildPreviewTabs(schedule, rooms, scheduleMode, validationReport), [schedule, rooms, scheduleMode, validationReport]);
+  const totalStudents = physics.students.length + history.students.length;
+  const enabledRooms = rooms.filter((room) => room.enabled).length;
+  const hasStarted = totalStudents > 0 || rooms.length > 0 || Object.keys(minorRooms).length > 0;
+  const visibleErrors = hasStarted ? allErrors : [];
+  const routedIssues = useMemo(() => visibleErrors.map(createIssueRoute), [visibleErrors]);
+  const activeStepIssues = useMemo(() => routedIssues.filter((issue) => issue.stepIndex === activeStep), [routedIssues, activeStep]);
+  const configuredMinorRooms = minorLanguages.filter((language) => minorRooms[language]?.roomNo).length;
+  const languageStats = useMemo(() => buildLanguageStats([...physics.students, ...history.students], minorRooms), [physics.students, history.students, minorRooms]);
+  const roomStats = useMemo(() => buildRoomStats(rooms), [rooms]);
+  const duplicateDoorNos = useMemo(() => findDuplicateDoorNos(rooms), [rooms]);
+  const roomConflictErrors = useMemo(() => visibleErrors.filter((error) => error.includes("同时用于") || error.includes("门牌")), [visibleErrors]);
+  const conflictDoorNos = useMemo(() => extractDoorNosFromErrors(roomConflictErrors), [roomConflictErrors]);
+  const roomIssueDoorNos = useMemo(() => new Set([...duplicateDoorNos, ...conflictDoorNos]), [duplicateDoorNos, conflictDoorNos]);
+  const progressValue = Math.round(((activeStep + 1) / 6) * 100);
+  const filteredRecords = useMemo(() => {
+    const term = recordFilter.trim().toLowerCase();
+    if (!term) return records;
+    return records.filter((record) => [record.examName, record.examDate, record.version].some((value) => String(value || "").toLowerCase().includes(term)));
+  }, [records, recordFilter]);
+
+  useEffect(() => {
+    if (view !== "workspace") return;
+    saveWorkspaceDraft({
+      examName,
+      examDate,
+      physics,
+      history,
+      rooms,
+      minorRooms,
+      scheduleMode,
+      examTimes,
+      selected,
+      exportMode,
+      activeStep,
+      previewKey,
+    });
+  }, [view, examName, examDate, physics, history, rooms, minorRooms, scheduleMode, examTimes, selected, exportMode, activeStep, previewKey]);
+
+  const handleStudentFile = async (file, pool) => {
+    const parsed = await parseStudentImportSource(file, pool);
+    if (pool === "物理") setPhysicsAndStore(parsed);
+    if (pool === "历史") setHistoryAndStore(parsed);
+  };
+
+  const setPhysicsAndStore = (next) => {
+    setPhysics((prev) => {
+      const resolved = typeof next === "function" ? next(prev) : next;
+      saveImportedPool("physics-import", resolved);
+      return resolved;
+    });
+  };
+
+  const setHistoryAndStore = (next) => {
+    setHistory((prev) => {
+      const resolved = typeof next === "function" ? next(prev) : next;
+      saveImportedPool("history-import", resolved);
+      return resolved;
+    });
+  };
+
+  const updateStudent = (pool, index, patch) => {
+    const setter = pool === "物理" ? setPhysicsAndStore : setHistoryAndStore;
+    setter((prev) => ({
+      ...prev,
+      students: prev.students.map((student, rowIndex) => (rowIndex === index ? patchStudent(student, patch, pool) : student)),
+    }));
+  };
+
+  const moveStudent = (fromPool, index, toPool) => {
+    const sourceSetter = fromPool === "物理" ? setPhysicsAndStore : setHistoryAndStore;
+    const targetSetter = toPool === "物理" ? setPhysicsAndStore : setHistoryAndStore;
+    sourceSetter((prev) => {
+      const moving = prev.students[index];
+      if (!moving) return prev;
+      targetSetter((targetPrev) => ({ ...targetPrev, students: [...targetPrev.students, patchStudent({ ...moving, pool: toPool }, { firstSubject: toPool }, toPool)] }));
+      return { ...prev, students: prev.students.filter((_, rowIndex) => rowIndex !== index) };
+    });
+  };
+
+  const handleRoomFile = async (file) => {
+    const parsedRooms = await parseRoomImportSource(file);
+    setRoomsAndStore(parsedRooms.length ? parsedRooms : rooms);
+  };
+
+  const setRoomsAndStore = (nextRooms) => {
+    setRooms(nextRooms);
+    localStorage.setItem("exam-rooms", JSON.stringify(nextRooms));
+  };
+
+  const updateRoom = (index, patch) => {
+    const nextRooms = rooms.map((room, roomIndex) => (roomIndex === index ? { ...room, ...patch } : room));
+    setRoomsAndStore(nextRooms);
+  };
+
+  const addRoom = () => {
+    const enabledRooms = rooms.filter((room) => room.enabled && room.roomNo);
+    const numericRoomNos = enabledRooms.map((room) => Number(room.roomNo)).filter(Number.isFinite);
+    const nextRoomNo = numericRoomNos.length ? Math.max(...numericRoomNos) + 1 : rooms.length + 1;
+    setRoomsAndStore([
+      ...rooms,
+      {
+        roomNo: String(nextRoomNo),
+        doorNo: "",
+        roomName: "",
+        capacity: 40,
+        enabled: true,
+      },
+    ]);
+  };
+
+  const removeRoom = (index) => {
+    setRoomsAndStore(rooms.filter((_, roomIndex) => roomIndex !== index));
+  };
+
+  const updateMinorRoom = (language, patch) => {
+    const next = { ...minorRooms, [language]: { ...minorRooms[language], ...patch } };
+    setMinorRooms(next);
+    localStorage.setItem("minor-language-rooms", JSON.stringify(next));
+  };
+
+  const commitMinorRoom = (language, field, value) => {
+    updateMinorRoom(language, { [field]: value });
+  };
+
+  const updateExamTime = (index, patch) => {
+    const next = examTimes.map((item, itemIndex) => (itemIndex === index ? { ...item, ...patch } : item));
+    setExamTimes(next);
+    localStorage.setItem("exam-times", JSON.stringify(next));
+  };
+
+  const applyTimeTemplate = (firstDate = examDate, mode = scheduleMode) => {
+    const next = mode === SCHEDULE_MODES.TWO_DAY_COMBO ? buildTwoDayTimes(firstDate) : buildThreeDayTimes(firstDate);
+    setExamDate(firstDate);
+    setExamTimes(next);
+    localStorage.setItem("exam-date", firstDate);
+    localStorage.setItem("exam-times", JSON.stringify(next));
+  };
+
+  const updateScheduleMode = (mode) => {
+    setScheduleMode(mode);
+    localStorage.setItem("schedule-mode", mode);
+  };
+
+  const saveRecord = () => {
+    if (allErrors.length) return;
+    const record = saveExamRecord({
+      examName,
+      examDate,
+      physics,
+      history,
+      rooms,
+      minorRooms,
+      examTimes,
+      selected,
+      schedule,
+    });
+    setRecords(loadExamRecords());
+    setSavedMessage(`已保存：${record.examName} 第 ${record.version} 版`);
+    setTimeout(() => setSavedMessage(""), 2600);
+  };
+
+  const removeRecord = (id) => {
+    deleteExamRecord(id);
+    setRecords(loadExamRecords());
+  };
+
+  const clearLocalData = () => {
+    const confirmed = window.confirm("清空后，本机浏览器里的学生名单、考场配置、考试时间和历史记录都会删除。已导出的 Excel 不受影响。确定清空吗？");
+    if (!confirmed) return;
+    LOCAL_STORAGE_KEYS.forEach((key) => localStorage.removeItem(key));
+    const today = todayLocalDateString();
+    setExamName("高三大型考试");
+    setExamDate(today);
+    setPhysics({ students: [], errors: [], fieldMap: {} });
+    setHistory({ students: [], errors: [], fieldMap: {} });
+    setRooms(defaultRooms());
+    setMinorRooms({});
+    setExamTimes(buildThreeDayTimes(today));
+    setScheduleMode(SCHEDULE_MODES.THREE_DAY_SPLIT);
+    setExportMode(EXPORT_GROUPS.ALL);
+    setSelected({ grade: true, classes: true, subjectSheets: false, roomSummary: false, roomSheets: true, doorSummary: true, timeSheet: true });
+    setRecords([]);
+    setRecordFilter("");
+    setActiveStep(0);
+    setSavedMessage("已清空本机数据");
+    setTimeout(() => setSavedMessage(""), 2400);
+  };
+
+  const exportNow = async () => {
+    if (allErrors.length) return;
+    const jobs = buildExportJobs({ examName, examDate, schedule, rooms, selected, exportMode });
+    if (exportMode === "package") {
+      await exportZipPackage({ examName, examDate, schedule, rooms, selected, jobs });
+      return;
+    }
+    for (const job of jobs) {
+      const { fileName, data } = await buildWorkbookFile({ examName, examDate, schedule, rooms, selected, ...job });
+      downloadBlob(new Blob([data], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }), fileName);
+    }
+  };
+
+  const exportRecord = async (record) => {
+    const recordSelected = { grade: true, classes: true, subjectSheets: false, roomSummary: false, roomSheets: true, doorSummary: true, timeSheet: true, ...(record.selected || {}) };
+    const jobs = buildExportJobs({
+      examName: record.examName,
+      examDate: record.examDate,
+      schedule: record.schedule,
+      rooms: record.rooms || defaultRooms(),
+      selected: recordSelected,
+      exportMode,
+    });
+    if (exportMode === "package") {
+      await exportZipPackage({
+        examName: record.examName,
+        examDate: record.examDate,
+        schedule: record.schedule,
+        rooms: record.rooms || defaultRooms(),
+        selected: recordSelected,
+        jobs,
+      });
+      return;
+    }
+    for (const job of jobs) {
+      const { fileName, data } = await buildWorkbookFile({
+        examName: record.examName,
+        examDate: record.examDate,
+        schedule: record.schedule,
+        rooms: record.rooms || defaultRooms(),
+        selected: recordSelected,
+        ...job,
+      });
+      downloadBlob(new Blob([data], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" }), fileName);
+    }
+  };
+
+  const updateExportMode = (mode) => {
+    setExportMode(mode);
+    localStorage.setItem("export-mode", mode);
+  };
+
+  const newBlankExam = () => {
+    const today = todayLocalDateString();
+    const blankPhysics = { students: [], errors: [], fieldMap: {} };
+    const blankHistory = { students: [], errors: [], fieldMap: {} };
+    const nextRooms = [];
+    const nextTimes = buildThreeDayTimes(today);
+    setExamName("高三大型考试");
+    setExamDate(today);
+    setPhysicsAndStore(blankPhysics);
+    setHistoryAndStore(blankHistory);
+    setRoomsAndStore(nextRooms);
+    setMinorRooms({});
+    setExamTimes(nextTimes);
+    setScheduleMode(SCHEDULE_MODES.THREE_DAY_SPLIT);
+    setSelected({ grade: true, classes: true, subjectSheets: false, roomSummary: false, roomSheets: true, doorSummary: true, timeSheet: true });
+    setActiveStep(0);
+    localStorage.setItem("minor-language-rooms", JSON.stringify({}));
+    localStorage.setItem("exam-times", JSON.stringify(nextTimes));
+    localStorage.setItem("schedule-mode", SCHEDULE_MODES.THREE_DAY_SPLIT);
+    localStorage.removeItem("exam-workspace-draft");
+    setSavedMessage("已新建空白考试");
+    setTimeout(() => setSavedMessage(""), 2200);
+    setView("workspace");
+  };
+
+  const loadRecordIntoWorkspace = (record) => {
+    setExamName(record.examName || "高三大型考试");
+    setExamDate(record.examDate || todayLocalDateString());
+    if (record.physics?.students || record.history?.students) {
+      setPhysicsAndStore(deserializePool(record.physics || { students: [], errors: [], fieldMap: {} }));
+      setHistoryAndStore(deserializePool(record.history || { students: [], errors: [], fieldMap: {} }));
+    }
+    setRoomsAndStore(record.rooms || defaultRooms());
+    setMinorRooms(record.minorRooms || {});
+    setExamTimes(record.examTimes || (record.schedule?.mode === SCHEDULE_MODES.TWO_DAY_COMBO ? buildTwoDayTimes(record.examDate || todayLocalDateString()) : buildThreeDayTimes(record.examDate || todayLocalDateString())));
+    setSelected({ grade: true, classes: true, subjectSheets: false, roomSummary: false, roomSheets: true, doorSummary: true, timeSheet: true, ...(record.selected || {}) });
+    setScheduleMode(record.schedule?.mode || SCHEDULE_MODES.THREE_DAY_SPLIT);
+    localStorage.setItem("minor-language-rooms", JSON.stringify(record.minorRooms || {}));
+    localStorage.setItem("exam-times", JSON.stringify(record.examTimes || []));
+    localStorage.setItem("schedule-mode", record.schedule?.mode || SCHEDULE_MODES.THREE_DAY_SPLIT);
+    localStorage.removeItem("exam-workspace-draft");
+    setActiveStep(4);
+    setSavedMessage(record.physics?.students || record.history?.students ? `已载入：${record.examName} 第 ${record.version} 版` : "已载入旧记录设置；旧记录不含可编辑学生池");
+    setTimeout(() => setSavedMessage(""), 2600);
+    setView("workspace");
+  };
+
+  const openRecord = (record) => {
+    loadRecordIntoWorkspace(record);
+  };
+
+  const goHome = () => {
+    setView("home");
+  };
+
+  const goIssue = (issue) => {
+    setActiveStep(issue.stepIndex);
+    setView("workspace");
+  };
+
+  const loadRecordById = (id) => {
+    const record = records.find((item) => item.id === id);
+    if (record) loadRecordIntoWorkspace(record);
+  };
+
+  const stepItems = [
+    {
+      title: "导入成绩单",
+      shortTitle: "导入",
+      emoji: "⬆️",
+      icon: <Upload size={18} />,
+      status: physics.students.length && history.students.length && !importErrors.length ? "done" : importErrors.length ? "error" : "idle",
+      note: "导入物理类、历史类成绩单。",
+      content: (
+        <>
+          <div className="upload-grid">
+            <FilePicker title="物理类成绩单" hint={`${physics.students.length} 人`} onFile={(file) => handleStudentFile(file, "物理")} />
+            <FilePicker title="历史类成绩单" hint={`${history.students.length} 人`} onFile={(file) => handleStudentFile(file, "历史")} />
+          </div>
+          <ImportErrorPanel errors={importErrors} />
+          <FieldMap title="物理类字段识别" map={physics.fieldMap} meta={physics.importMeta} />
+          <FieldMap title="历史类字段识别" map={history.fieldMap} meta={history.importMeta} />
+          <GradeRosterOverview physicsStudents={physics.students} historyStudents={history.students} />
+          <StudentRoster
+            title="物理类名单"
+            pool="物理"
+            students={physics.students}
+            onAdd={() => setPhysicsAndStore((prev) => ({ ...prev, students: [...prev.students, createBlankStudent("物理")] }))}
+            onChange={(index, patch) => updateStudent("物理", index, patch)}
+            onDelete={(index) => setPhysicsAndStore((prev) => ({ ...prev, students: prev.students.filter((_, rowIndex) => rowIndex !== index) }))}
+            onMove={(index) => moveStudent("物理", index, "历史")}
+            showSubjectScores={scheduleMode === SCHEDULE_MODES.THREE_DAY_SPLIT}
+          />
+          <StudentRoster
+            title="历史类名单"
+            pool="历史"
+            students={history.students}
+            onAdd={() => setHistoryAndStore((prev) => ({ ...prev, students: [...prev.students, createBlankStudent("历史")] }))}
+            onChange={(index, patch) => updateStudent("历史", index, patch)}
+            onDelete={(index) => setHistoryAndStore((prev) => ({ ...prev, students: prev.students.filter((_, rowIndex) => rowIndex !== index) }))}
+            onMove={(index) => moveStudent("历史", index, "物理")}
+            showSubjectScores={scheduleMode === SCHEDULE_MODES.THREE_DAY_SPLIT}
+          />
+        </>
+      ),
+    },
+    {
+      title: "确认考场",
+      shortTitle: "考场",
+      emoji: "🏫",
+      icon: <ClipboardList size={18} />,
+      status: hasStarted && rooms.filter((room) => room.enabled).length ? "done" : "idle",
+      note: "维护普通考场、门牌和容量。",
+      content: (
+        <>
+          <RoomFixPanel errors={roomConflictErrors} duplicateDoorNos={duplicateDoorNos} conflictDoorNos={conflictDoorNos} onGoMinor={() => setActiveStep(2)} />
+          <div className="toolbar">
+            <FilePicker compact title="导入旧门牌表" onFile={handleRoomFile} />
+            <button type="button" onClick={() => setRoomsAndStore(defaultRooms())}>套用默认22考场模板</button>
+            <button type="button" onClick={addRoom}>新增考场</button>
+          </div>
+          <div className="table-wrap room-table">
+            <table>
+              <thead>
+                <tr>
+                  <th>启用</th>
+                  <th>考场号</th>
+                  <th>门牌号</th>
+                  <th>教室</th>
+                  <th>容量</th>
+                  <th>操作</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rooms.map((room, index) => (
+                  <tr key={`${room.roomNo}-${index}`} className={roomIssueDoorNos.has(String(room.doorNo || "").trim()) ? "room-duplicate-row" : ""}>
+                    <td><input type="checkbox" checked={room.enabled} onChange={(event) => updateRoom(index, { enabled: event.target.checked })} /></td>
+                    <td><input value={room.roomNo} onChange={(event) => updateRoom(index, { roomNo: event.target.value })} /></td>
+                    <td><input value={room.doorNo} onChange={(event) => updateRoom(index, { doorNo: event.target.value })} /></td>
+                    <td><input value={room.roomName} onChange={(event) => updateRoom(index, { roomName: event.target.value })} /></td>
+                    <td><input type="number" min="1" value={room.capacity} onChange={(event) => updateRoom(index, { capacity: Number(event.target.value) || 40 })} /></td>
+                    <td><button type="button" onClick={() => removeRoom(index)}>删除</button></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      ),
+    },
+    {
+      title: "小语种",
+      shortTitle: "语种",
+      emoji: "💬",
+      icon: <FileSpreadsheet size={18} />,
+      status: hasStarted ? (minorLanguages.every((language) => minorRooms[language]?.roomNo) ? "done" : minorLanguages.length ? "idle" : "done") : "idle",
+      note: "小语种外语单独安排。",
+      content: (
+        <>
+          <p className="muted">小语种只用于外语考试，不限制容量。座位号按对应语种成绩倒序生成。小语种可使用普通考场号，例如 23；其他科目仍可把 23 当普通考场使用。</p>
+          {minorLanguages.length === 0 ? (
+            <div className="empty">当前成绩单未发现日语、俄语、西班牙语、法语、德语学生。</div>
+          ) : (
+            <div className="language-grid">
+              {minorLanguages.map((language) => (
+                <div className="language-row" key={language}>
+                  <strong>{language}</strong>
+                  <MinorRoomInput placeholder="考场号" value={minorRooms[language]?.roomNo || ""} onCommit={(value) => commitMinorRoom(language, "roomNo", value)} />
+                  <MinorRoomInput placeholder="门牌号" value={minorRooms[language]?.doorNo || ""} onCommit={(value) => commitMinorRoom(language, "doorNo", value)} />
+                  <MinorRoomInput placeholder="教室/教师" value={minorRooms[language]?.roomName || ""} onCommit={(value) => commitMinorRoom(language, "roomName", value)} />
+                </div>
+              ))}
+            </div>
+          )}
+        </>
+      ),
+    },
+    {
+      title: "考试时间",
+      shortTitle: "时间",
+      emoji: "🕘",
+      icon: <History size={18} />,
+      status: hasStarted && examTimes.length ? "done" : "idle",
+      note: scheduleMode === SCHEDULE_MODES.TWO_DAY_COMBO ? "套用两天组合时间。" : "套用三天固定时间。",
+      content: (
+        <>
+          <div className="time-template-panel">
+            <label>
+              <span>第一天日期</span>
+              <input type="date" value={examDate} onChange={(event) => {
+                setExamDate(event.target.value);
+                localStorage.setItem("exam-date", event.target.value);
+              }} />
+            </label>
+            <button type="button" className="primary" onClick={() => applyTimeTemplate(examDate, scheduleMode)}>{scheduleMode === SCHEDULE_MODES.TWO_DAY_COMBO ? "按两天模板铺开" : "按三天模板铺开"}</button>
+            <details className="advanced-mode">
+              <summary>高级设置</summary>
+              <label className="check-option">
+                <input type="radio" name="mode" checked={scheduleMode === SCHEDULE_MODES.THREE_DAY_SPLIT} onChange={() => updateScheduleMode(SCHEDULE_MODES.THREE_DAY_SPLIT)} />
+                3天考试
+              </label>
+              <label className="check-option">
+                <input type="radio" name="mode" checked={scheduleMode === SCHEDULE_MODES.TWO_DAY_COMBO} onChange={() => updateScheduleMode(SCHEDULE_MODES.TWO_DAY_COMBO)} />
+                2天考试
+              </label>
+            </details>
+          </div>
+          <div className="table-wrap compact-table">
+            <table>
+              <thead>
+                <tr>
+                  <th>科目</th>
+                  <th>日期</th>
+                  <th>开始</th>
+                  <th>结束</th>
+                </tr>
+              </thead>
+              <tbody>
+                {examTimes.map((item, index) => (
+                  <tr key={item.subject}>
+                    <td><input value={item.subject} onChange={(event) => updateExamTime(index, { subject: event.target.value })} /></td>
+                    <td><input type="date" value={item.date} onChange={(event) => updateExamTime(index, { date: event.target.value })} /></td>
+                    <td><input type="time" value={item.start} onChange={(event) => updateExamTime(index, { start: event.target.value })} /></td>
+                    <td><input type="time" value={item.end} onChange={(event) => updateExamTime(index, { end: event.target.value })} /></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      ),
+    },
+    {
+      title: "全面预览",
+      shortTitle: "预览",
+      emoji: "🔎",
+      icon: <AlertTriangle size={18} />,
+      status: visibleErrors.length ? "error" : schedule.allRows.length ? "done" : "idle",
+      note: "核对异常、总表和各科安排。",
+      content: (
+        <div className="preview-reader-layout">
+          {visibleErrors.length > 0 && (
+            <div className="error-box validation-error-box">
+              <strong>暂不能导出</strong>
+              <p>有 {visibleErrors.length} 条阻断错误。先点左侧“校验报告”查看原因和建议。</p>
+            </div>
+          )}
+          <PreviewPanel tabs={previewTabs} activeKey={previewKey} onChange={setPreviewKey} />
+          <details className="preview-support-panel">
+            <summary>排考摘要与学生查询</summary>
+            <div className="summary-grid compact">
+              <Metric label="学生总数" value={schedule.allRows.length} />
+              <Metric label="物理类" value={physics.students.length} />
+              <Metric label="历史类" value={history.students.length} />
+              <Metric label="普通考场" value={rooms.filter((room) => room.enabled).length} />
+              <Metric label="排考规则" value={scheduleMode === SCHEDULE_MODES.THREE_DAY_SPLIT ? "三天拆分" : "两天组合"} />
+              <ScheduleSummaryDetails lines={schedule.summary} />
+              <StudentSearch query={studentQuery} onQuery={setStudentQuery} rows={studentSearchRows} />
+            </div>
+          </details>
+        </div>
+      ),
+    },
+    {
+      title: "导出",
+      shortTitle: "导出",
+      emoji: "⬇️",
+      icon: <Download size={18} />,
+      status: "idle",
+      note: "生成 Excel 材料。",
+      content: (
+        <>
+          <div className="export-options export-options-list">
+            <span className="check-option export-fixed-option"><input type="checkbox" checked readOnly /> 校验报告</span>
+            <CheckOption label="门牌人数总览" checked={selected.doorSummary} onChange={(doorSummary) => setSelected({ ...selected, doorSummary })} />
+            <CheckOption label="管理总表" checked={selected.grade} onChange={(grade) => setSelected({ ...selected, grade })} />
+            <CheckOption label="班主任表" checked={selected.classes} onChange={(classes) => setSelected({ ...selected, classes })} />
+            <CheckOption label="考场信息表" checked={selected.roomSheets} onChange={(roomSheets) => setSelected({ ...selected, roomSheets })} />
+            <CheckOption label="考试时间表" checked={selected.timeSheet} onChange={(timeSheet) => setSelected({ ...selected, timeSheet })} />
+            <CheckOption label="科目总表" checked={selected.subjectSheets} onChange={(subjectSheets) => setSelected({ ...selected, subjectSheets })} />
+            <CheckOption label="考务汇总" checked={selected.roomSummary} onChange={(roomSummary) => setSelected({ ...selected, roomSummary })} />
+          </div>
+          <div className="export-mode">
+            <span>导出方式</span>
+            <label><input type="radio" name="exportMode" checked={exportMode === EXPORT_GROUPS.ALL} onChange={() => updateExportMode(EXPORT_GROUPS.ALL)} /> 合成一个 Excel</label>
+            <label><input type="radio" name="exportMode" checked={exportMode === "package"} onChange={() => updateExportMode("package")} /> 分别导出多个 Excel</label>
+          </div>
+          <div className="export-summary">
+            <span>本次会生成</span>
+            <div className="export-summary-chips">
+              {exportSummaryItems.map((item) => <span key={item}>{item}</span>)}
+            </div>
+            <small>校验报告会单独导出给你复核；班主任表和考场信息表不夹带校验报告。</small>
+          </div>
+          <div className="actions">
+            <button type="button" className="primary" disabled={allErrors.length > 0} onClick={exportNow}><Download size={17} /> 导出Excel</button>
+            <button type="button" disabled={allErrors.length > 0} onClick={saveRecord}>保存到本机历史</button>
+            {savedMessage && <span className="saved">{savedMessage}</span>}
+          </div>
+        </>
+      ),
+    },
+  ];
+
+  const activeStepItem = stepItems[activeStep];
+  const isPreviewStep = activeStepItem.shortTitle === "预览";
+
+  return view === "home" ? (
+    <main className="app-shell home-shell">
+      <header className="marketing-nav">
+        <div>
+          <strong>Seeklume</strong>
+          <span>本地教育工具</span>
+        </div>
+        <button type="button" className="nav-link" onClick={() => setShowAbout(true)}><Info size={16} /> 隐私与版权</button>
+      </header>
+      <section className="home-hero">
+        <div className="home-hero-copy fade-up">
+          <span className="status-note"><Sparkles size={13} /> 不登录 · 不上传 · 仅本机保存</span>
+          <h1>Seeklume 排考工具</h1>
+          <p className="home-sub">Seeklume 品牌下的本地排考子项目。导入成绩单，生成考场，检查冲突，然后直接导出能打印的 Excel；学生数据只留在当前浏览器。</p>
+          <div className="home-actions">
+            <button type="button" className="primary" onClick={newBlankExam}><FilePlus2 size={16} /> 开始排考</button>
+            <button type="button" onClick={() => setShowAbout(true)}><Info size={16} /> 查看说明</button>
+          </div>
+        </div>
+      </section>
+      <section className="local-records-panel" aria-label="本机历史记录">
+        <div className="records-heading">
+          <div>
+            <h2>本机历史记录</h2>
+            <p>只读取当前浏览器的本地记录。换设备、换浏览器或清理缓存后，这里可能看不到旧考试。</p>
+          </div>
+          <div className="record-toolbar">
+            <label className="record-search">
+              <Search size={15} />
+              <input value={recordFilter} placeholder="搜索考试名称/日期/版本" onChange={(event) => setRecordFilter(event.target.value)} />
+            </label>
+            <button type="button" onClick={clearLocalData}><Trash2 size={16} /> 清空本机数据</button>
+          </div>
+        </div>
+        {filteredRecords.length ? (
+          <div className="record-list">
+            {filteredRecords.slice(0, 8).map((record) => (
+              <article className="record-card" key={record.id}>
+                <div>
+                  <strong>{record.examName || "未命名考试"}</strong>
+                  <span>{record.examDate || "未设置日期"} · 第 {record.version || 1} 版 · {formatRecordTime(record.createdAt)}</span>
+                </div>
+                <div className="record-actions">
+                  <button type="button" onClick={() => openRecord(record)}>打开</button>
+                  <button type="button" onClick={() => exportRecord(record)}><Download size={16} /> 导出</button>
+                  <button type="button" onClick={() => removeRecord(record.id)}><Trash2 size={16} /> 删除</button>
+                </div>
+              </article>
+            ))}
+          </div>
+        ) : (
+          <div className="empty local-empty">
+            {records.length ? "没有匹配的本机历史记录。" : "还没有本机历史。完成排考后，在导出页点击“保存到本机历史”即可回看。"}
+          </div>
+        )}
+      </section>
+      <section className="marketing-features">
+        <article>
+          <span>📂</span>
+          <h3>导入成绩单</h3>
+          <p>物理类、历史类分别导入，字段自动识别，也能适配更多原始表格式。</p>
+        </article>
+        <article>
+          <span>✅</span>
+          <h3>先校验再导出</h3>
+          <p>漏排、重复、容量、同一时段教室冲突都会在导出前拦住。</p>
+        </article>
+        <article>
+          <span>📤</span>
+          <h3>直接给老师用</h3>
+          <p>年级总表、班主任表、考场信息表和门牌人数表按打印场景生成。</p>
+        </article>
+      </section>
+      <footer className="brand-footer">© Seeklume · 本地排考工具 · 学生数据不上传云端</footer>
+      {showAbout && <AboutModal onClose={() => setShowAbout(false)} />}
+    </main>
+  ) : (
+    <main className="app-shell">
+      <header className="topbar">
+        <div className="topbar-brand">
+          <span className="brand-logo">Seeklume</span>
+        </div>
+        <div className={`dynamic-island ${visibleErrors.length ? "warning" : "ready"}`} role="status">
+          <span className="island-emoji" aria-hidden="true">{visibleErrors.length ? "⚠️" : activeStepItem.emoji}</span>
+          <span className="island-title">{activeStepItem.shortTitle}</span>
+          <span className="island-detail">{visibleErrors.length ? `${visibleErrors.length} 项待处理` : "就绪"}</span>
+          <div className="island-popover" role="tooltip">
+            {visibleErrors.length ? (
+              <div className="issue-popover-list">
+                <strong>阻断问题</strong>
+                {routedIssues.slice(0, 4).map((issue) => (
+                  <button type="button" className="issue-popover-row" key={issue.message} onClick={() => goIssue(issue)}>
+                    <span>{issue.emoji}</span>
+                    <b>{issue.stepTitle}</b>
+                    <small>{issue.detail || issue.summary}</small>
+                  </button>
+                ))}
+                {visibleErrors.length > 4 && <p>还有 {visibleErrors.length - 4} 条，请看当前步骤卡片。</p>}
+              </div>
+            ) : (
+              <>
+                <strong>{hasStarted ? "当前可生成" : "就绪"}</strong>
+                <p>{hasStarted ? "硬校验通过。导出前可在预览页查看完整校验报告。" : "可以开始导入成绩单和考场。"}</p>
+              </>
+            )}
+          </div>
+        </div>
+        <button type="button" className="privacy" onClick={() => setShowAbout(true)}><CheckCircle2 size={18} /> 仅本机保存 · 不上传云端</button>
+      </header>
+
+      <section className="exam-meta">
+        <label>
+          考试名称
+          <input value={examName} onChange={(event) => setExamName(event.target.value)} />
+        </label>
+        <label>
+          考试日期
+          <input type="date" value={examDate} onChange={(event) => {
+            setExamDate(event.target.value);
+            applyTimeTemplate(event.target.value, scheduleMode);
+          }} />
+        </label>
+      </section>
+
+      <div className={`workbench-layout ${isPreviewStep ? "with-sidebar" : "single-panel"}`}>
+        {isPreviewStep && (
+          <aside className="workbench-sidebar">
+            <div className="sidebar-exam">
+              <span>预览导航</span>
+              <strong>{examName || "未命名考试"}</strong>
+              <small>{examDate || "未设置日期"} · 请选择要查看的表</small>
+            </div>
+            <nav className="sidebar-steps" aria-label="预览导航">
+              {previewTabs.map((tabItem) => (
+                <button
+                  key={tabItem.key}
+                  type="button"
+                  className={tabItem.key === previewKey ? "active" : ""}
+                  onClick={() => setPreviewKey(tabItem.key)}
+                >
+                  <b>{tabItem.label}</b>
+                  <em>{tabItem.rows.length}</em>
+                </button>
+              ))}
+            </nav>
+            <div className="preview-sidebar-summary">
+              <StatCard emoji="👥" icon={<UsersRound size={21} />} label="学生" value={`${totalStudents}`} hint="物理 + 历史" popup={<StudentStatPopup physics={physics.students.length} history={history.students.length} total={totalStudents} />} />
+              <StatCard emoji="🏫" icon={<School size={21} />} label="考场" value={`${enabledRooms}`} hint={`配置 ${rooms.length}`} popup={<RoomStatPopup stats={roomStats} />} />
+              <StatCard emoji="💬" icon={<Globe2 size={21} />} label="语种" value={foreignLanguages.length ? `${foreignLanguages.length}种` : "无"} hint={minorLanguages.length ? `小语种 ${configuredMinorRooms}/${minorLanguages.length}` : "仅英语"} popup={<LanguageStatPopup stats={languageStats} />} />
+              <StatCard emoji={visibleErrors.length ? "⚠️" : "✅"} icon={visibleErrors.length ? <AlertTriangle size={21} /> : <CheckCircle2 size={21} />} label="校验" value={visibleErrors.length ? `${visibleErrors.length}` : hasStarted ? "通过" : "待开始"} hint={visibleErrors.length ? "待处理" : hasStarted ? "可生成" : "未导入"} tone={visibleErrors.length ? "danger" : "success"} popup={<ValidationStatPopup issues={routedIssues} summary={validationSummary} hasStarted={hasStarted} onIssueClick={goIssue} />} />
+            </div>
+          </aside>
+        )}
+
+        <section className="workspace-panel">
+          <Step number={activeStep + 1} title={activeStepItem.title} emoji={activeStepItem.emoji} icon={activeStepItem.icon} status={activeStepItem.status} note={activeStepItem.note} issues={activeStepIssues} onIssueClick={goIssue}>
+            {activeStepItem.content}
+          </Step>
+        </section>
+      </div>
+
+      <div className="floating-step-actions">
+        <button type="button" disabled={activeStep === 0} onClick={() => setActiveStep(activeStep - 1)}>上一步</button>
+        <button type="button" className="primary" disabled={activeStep === stepItems.length - 1} onClick={() => setActiveStep(activeStep + 1)}>下一步</button>
+      </div>
+
+      <nav className="dock" aria-label="排考步骤">
+        <button
+          type="button"
+          className="dock-item home-dock-item"
+          onClick={goHome}
+          title="Home"
+          data-label="返回首页"
+        >
+          <span className="dock-emoji" aria-hidden="true">🏠</span>
+          <span className="dock-state" aria-label="返回首页" />
+        </button>
+        {stepItems.map((item, index) => {
+          const stepIssueCount = routedIssues.filter((issue) => issue.stepIndex === index).length;
+          return (
+          <button
+            key={item.title}
+            type="button"
+            className={`dock-item ${index === activeStep ? "active" : ""} ${item.status} ${stepIssueCount ? "has-issue" : ""}`}
+            onClick={() => setActiveStep(index)}
+            title={item.title}
+            data-label={stepIssueCount ? `${dockTipLabel(item.title)} · ${stepIssueCount}个问题` : dockTipLabel(item.title)}
+          >
+            <span className="dock-emoji" aria-hidden="true">{item.emoji}</span>
+            {stepIssueCount > 0 && <span className="dock-issue-badge">{stepIssueCount}</span>}
+            <span className="dock-state" aria-label={getStatusLabel(item.status)} />
+          </button>
+          );
+        })}
+      </nav>
+      {showAbout && <AboutModal onClose={() => setShowAbout(false)} />}
+    </main>
+  );
+}
+
+function AboutModal({ onClose }) {
+  return (
+    <div className="fullscreen-overlay about-overlay" role="dialog" aria-modal="true" aria-label="隐私与版权说明">
+      <section className="about-card">
+        <div className="about-head">
+          <div>
+            <span>Seeklume Local Tool</span>
+            <h2>隐私与版权说明</h2>
+          </div>
+          <button type="button" onClick={onClose}>关闭</button>
+        </div>
+        <div className="about-grid">
+          <article>
+            <strong>数据留在本机</strong>
+            <p>本工具不登录、不上传、不做云端同步。学生名单、考场配置、考试时间和本机历史只保存在当前浏览器。</p>
+          </article>
+          <article>
+            <strong>历史记录边界</strong>
+            <p>更换电脑、清理浏览器缓存、使用无痕模式或换域名访问，都可能导致历史不可见。长期备份请导出 Excel 自行保存。</p>
+          </article>
+          <article>
+            <strong>产权归属</strong>
+            <p>工具版权与品牌归 Seeklume 所有。未经允许，不得复制、二次分发或商用改造。</p>
+          </article>
+        </div>
+        <p className="about-note">Seeklume 提供工具，数据留在本机。</p>
+      </section>
+    </div>
+  );
+}
+
+async function exportZipPackage({ examName, examDate, schedule, rooms, selected, jobs }) {
+  const zip = new JSZip();
+  for (const job of jobs) {
+    const { fileName, data } = await buildWorkbookFile({ examName, examDate, schedule, rooms, selected, ...job });
+    assertWorkbookDownloadable(fileName, data);
+    zip.file(fileName, data);
+  }
+  const blob = await zip.generateAsync({ type: "blob" });
+  downloadBlob(blob, buildExportFileName(examName, examDate, "分开材料").replace(/\.xlsx$/, ".zip"));
+}
+
+function assertWorkbookDownloadable(fileName, data) {
+  const bytes = data instanceof Uint8Array ? data : new Uint8Array(data);
+  const isZip = bytes[0] === 0x50 && bytes[1] === 0x4b && bytes[2] === 0x03 && bytes[3] === 0x04;
+  if (!isZip || bytes.byteLength < 4000) {
+    throw new Error(`${fileName} 生成异常，请先检查是否已经生成排考内容。`);
+  }
+}
+
+function downloadBlob(blob, fileName) {
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = fileName;
+  document.body.appendChild(anchor);
+  anchor.click();
+  anchor.remove();
+  window.setTimeout(() => URL.revokeObjectURL(url), 60_000);
+}
+
+function loadRooms() {
+  try {
+    return JSON.parse(localStorage.getItem("exam-rooms") || "null") || defaultRooms();
+  } catch {
+    return defaultRooms();
+  }
+}
+
+function loadMinorRooms() {
+  try {
+    return JSON.parse(localStorage.getItem("minor-language-rooms") || "{}");
+  } catch {
+    return {};
+  }
+}
+
+function loadExamTimes() {
+  try {
+    return JSON.parse(localStorage.getItem("exam-times") || "null") || buildThreeDayTimes(todayLocalDateString());
+  } catch {
+    return buildThreeDayTimes(todayLocalDateString());
+  }
+}
+
+function loadExamDate() {
+  return localStorage.getItem("exam-date") || todayLocalDateString();
+}
+
+function loadScheduleMode() {
+  return localStorage.getItem("schedule-mode") || SCHEDULE_MODES.THREE_DAY_SPLIT;
+}
+
+function loadExportMode() {
+  return localStorage.getItem("export-mode") || EXPORT_GROUPS.ALL;
+}
+
+function loadWorkspaceDraft() {
+  try {
+    const stored = JSON.parse(localStorage.getItem("exam-workspace-draft") || "null");
+    if (!stored) return null;
+    return {
+      ...stored,
+      physics: stored.physics ? deserializePool(stored.physics) : null,
+      history: stored.history ? deserializePool(stored.history) : null,
+      rooms: stored.rooms || null,
+      minorRooms: stored.minorRooms || null,
+      examTimes: stored.examTimes || null,
+      selected: stored.selected || null,
+    };
+  } catch {
+    return null;
+  }
+}
+
+function saveWorkspaceDraft(draft) {
+  try {
+    localStorage.setItem("exam-workspace-draft", JSON.stringify({
+      ...draft,
+      physics: serializePoolForDraft(draft.physics),
+      history: serializePoolForDraft(draft.history),
+      rooms: draft.rooms,
+      minorRooms: draft.minorRooms,
+      examTimes: draft.examTimes,
+      selected: draft.selected,
+    }));
+  } catch {
+    // keep working in-memory even if storage is full
+  }
+}
+
+function serializePoolForDraft(pool) {
+  if (!pool) return null;
+  return {
+    ...pool,
+    students: (pool.students || []).map(serializeStudent),
+  };
+}
+
+function loadImportedPool(key) {
+  try {
+    const stored = JSON.parse(localStorage.getItem(key) || "null");
+    if (!stored) return { students: [], errors: [], fieldMap: {} };
+    return {
+      ...stored,
+      errors: stored.errors || [],
+      fieldMap: stored.fieldMap || {},
+      students: (stored.students || []).map(deserializeStudent),
+    };
+  } catch {
+    return { students: [], errors: [], fieldMap: {} };
+  }
+}
+
+function deserializePool(pool) {
+  return {
+    ...pool,
+    errors: pool.errors || [],
+    fieldMap: pool.fieldMap || {},
+    students: (pool.students || []).map(deserializeStudent),
+  };
+}
+
+function saveImportedPool(key, value) {
+  try {
+    localStorage.setItem(key, JSON.stringify({
+      ...value,
+      students: (value.students || []).map(serializeStudent),
+    }));
+  } catch {
+    // localStorage can fail if the browser quota is full; keep the in-memory edit usable.
+  }
+}
+
+function serializeStudent(student) {
+  return {
+    ...student,
+    totalRank: encodeNumber(student.totalRank),
+    totalScore: encodeNumber(student.totalScore),
+    mathScore: encodeNumber(student.mathScore),
+    foreignScore: encodeNumber(student.foreignScore),
+    languageScore: encodeNumber(student.languageScore),
+    subjectScores: Object.fromEntries(Object.entries(student.subjectScores || {}).map(([subject, value]) => [subject, encodeNumber(value)])),
+  };
+}
+
+function deserializeStudent(student) {
+  return {
+    ...student,
+    totalRank: decodeNumber(student.totalRank),
+    totalScore: decodeNumber(student.totalScore),
+    mathScore: decodeNumber(student.mathScore),
+    foreignScore: decodeNumber(student.foreignScore),
+    languageScore: decodeNumber(student.languageScore),
+    subjectScores: Object.fromEntries(Object.entries(student.subjectScores || {}).map(([subject, value]) => [subject, decodeNumber(value)])),
+  };
+}
+
+function encodeNumber(value) {
+  if (Number.isNaN(value)) return "__NaN__";
+  if (value === Number.POSITIVE_INFINITY) return "__Infinity__";
+  if (value === Number.NEGATIVE_INFINITY) return "__-Infinity__";
+  return value;
+}
+
+function decodeNumber(value) {
+  if (value === "__NaN__") return Number.NaN;
+  if (value === "__Infinity__") return Number.POSITIVE_INFINITY;
+  if (value === "__-Infinity__") return Number.NEGATIVE_INFINITY;
+  return value;
+}
+
+function buildThreeDayTimes(firstDate) {
+  return TEMPLATE_TIMES.map((item) => {
+    return {
+      subject: item.subject,
+      date: addDaysToDateString(firstDate, item.dayOffset),
+      start: item.start,
+      end: item.end,
+    };
+  });
+}
+
+function buildTwoDayTimes(firstDate) {
+  return [
+    { subject: "语文", dayOffset: 0, start: "09:00", end: "11:30" },
+    { subject: "数学", dayOffset: 0, start: "15:00", end: "17:00" },
+    { subject: "物理/历史", dayOffset: 1, start: "09:00", end: "10:15" },
+    { subject: "外语", dayOffset: 1, start: "15:00", end: "17:00" },
+    { subject: "四选二", dayOffset: 1, start: "17:20", end: "18:35" },
+  ].map((item) => ({
+    subject: item.subject,
+    date: addDaysToDateString(firstDate, item.dayOffset),
+    start: item.start,
+    end: item.end,
+  }));
+}
+
+function addDaysToDateString(dateString, days) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateString || "");
+  if (!match) return "";
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  const date = new Date(year, month - 1, day + days);
+  const yyyy = date.getFullYear();
+  const mm = String(date.getMonth() + 1).padStart(2, "0");
+  const dd = String(date.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+function todayLocalDateString() {
+  const date = new Date();
+  const yyyy = date.getFullYear();
+  const mm = String(date.getMonth() + 1).padStart(2, "0");
+  const dd = String(date.getDate()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd}`;
+}
+
+function Step({ number, title, emoji, icon, status, note, issues = [], onIssueClick, children }) {
+  return (
+    <section className="step">
+      <div className="step-title">
+        <span className="step-number">{number}</span>
+        <div className="step-copy">
+          <div className="step-head">
+            <span className="step-emoji" aria-hidden="true">{emoji}</span>
+            <h2>{title}</h2>
+            <span className={`step-badge ${status}`}>{getStatusLabel(status)}</span>
+          </div>
+          <p>{note}</p>
+        </div>
+      </div>
+      <StepIssueGuide issues={issues} onIssueClick={onIssueClick} />
+      {children}
+    </section>
+  );
+}
+
+function StepIssueGuide({ issues, onIssueClick }) {
+  if (!issues.length) return null;
+  return (
+    <div className="step-issue-guide">
+      <div>
+        <strong>这一步有 {issues.length} 个问题</strong>
+        <span>{issues[0]?.detail || "先处理这里，校验会自动刷新。"}</span>
+      </div>
+      <div className="step-issue-list">
+        {issues.slice(0, 6).map((issue) => (
+          <button type="button" key={issue.message} onClick={() => onIssueClick?.(issue)}>
+            <span>{issue.emoji}</span>
+            <b>{issue.summary}</b>
+            <small>{issue.detail}</small>
+          </button>
+        ))}
+        {issues.length > 6 && <span className="issue-more">还有 {issues.length - 6} 个</span>}
+      </div>
+    </div>
+  );
+}
+
+function FilePicker({ title, hint, onFile, compact = false }) {
+  const emoji = title.includes("物理") ? "⚛️" : title.includes("历史") ? "📜" : title.includes("门牌") ? "🪧" : "📄";
+  return (
+    <label className={compact ? "file-picker compact-picker" : "file-picker"}>
+      <span className="file-emoji" aria-hidden="true">{emoji}</span>
+      <span>{title}</span>
+      {hint && <small>{hint}</small>}
+      <input type="file" accept=".xls,.xlsx" onChange={(event) => event.target.files?.[0] && onFile(event.target.files[0])} />
+    </label>
+  );
+}
+
+function ImportErrorPanel({ errors }) {
+  if (!errors.length) return null;
+  return (
+    <div className="error-box import-error-panel">
+      <strong>导入需要处理</strong>
+      <ul>
+        {errors.slice(0, 8).map((error) => <li key={error}>{error}</li>)}
+      </ul>
+      {errors.length > 8 && <p>还有 {errors.length - 8} 条，请先修正导入文件或学生类别。</p>}
+    </div>
+  );
+}
+
+function FieldMap({ title, map, meta }) {
+  const entries = Object.entries(map || {}).filter(([, value]) => value);
+  if (!entries.length) return null;
+  return (
+    <details className="field-map">
+      <summary>{title}</summary>
+      {meta && (
+        <p className="field-map-meta">
+          自动读取：{meta.sheetName || "第一个工作表"} · 表头第 {meta.headerRowNumber || 1} 行
+        </p>
+      )}
+      <div>{entries.map(([key, value]) => <span key={key}>{key} → {value}</span>)}</div>
+    </details>
+  );
+}
+
+function MinorRoomInput({ placeholder, value, onCommit }) {
+  const [draft, setDraft] = useState(value || "");
+  useEffect(() => setDraft(value || ""), [value]);
+  const commit = () => {
+    if (draft !== (value || "")) onCommit(draft);
+  };
+  return (
+    <input
+      placeholder={placeholder}
+      value={draft}
+      onChange={(event) => setDraft(event.target.value)}
+      onBlur={commit}
+      onKeyDown={(event) => {
+        if (event.key === "Enter") event.currentTarget.blur();
+      }}
+    />
+  );
+}
+
+function Metric({ label, value }) {
+  return (
+    <div className="metric">
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
+  );
+}
+
+function ScheduleSummaryDetails({ lines }) {
+  if (!lines?.length) return null;
+  return (
+    <details className="summary-details">
+      <summary>
+        <span>排考生成摘要</span>
+        <small>{lines.length} 条统计</small>
+      </summary>
+      <div className="summary-list">
+        {lines.map((line) => <span key={line}>{line}</span>)}
+      </div>
+    </details>
+  );
+}
+
+function StatCard({ emoji, icon, label, value, hint, tone = "neutral", popup }) {
+  return (
+    <article className={`stat-card ${tone}`}>
+      <span className="stat-watermark" aria-hidden="true">{emoji}</span>
+      <div className="stat-top">
+        <span className="stat-icon" aria-hidden="true">{emoji}</span>
+        <span className="stat-label">{label}</span>
+      </div>
+      <strong className="stat-value">{value}</strong>
+      <span className="stat-hint">{hint}</span>
+      {popup && <div className="stat-popup" role="tooltip">{popup}</div>}
+    </article>
+  );
+}
+
+function StudentStatPopup({ physics, history, total }) {
+  return (
+    <div className="popup-list">
+      <strong>学生概览</strong>
+      <span>物理类 <b>{physics}</b> 人</span>
+      <span>历史类 <b>{history}</b> 人</span>
+      <span>合计 <b>{total}</b> 人</span>
+    </div>
+  );
+}
+
+function RoomStatPopup({ stats }) {
+  return (
+    <div className="popup-list">
+      <strong>考场概览</strong>
+      <span>启用 <b>{stats.enabled}</b> 个</span>
+      <span>总座位 <b>{stats.capacity}</b> 个</span>
+      <span>最大容量 <b>{stats.maxCapacity}</b> 人/场</span>
+    </div>
+  );
+}
+
+function LanguageStatPopup({ stats }) {
+  return (
+    <div className="popup-list">
+      <strong>外语语种</strong>
+      {stats.map((item) => (
+        <span key={item.language}>
+          {item.language} <b>{item.count}</b> 人{item.language === "英语" ? "" : ` · ${item.roomNo ? `${item.roomNo}考场` : "未设考场"}`}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+function ValidationStatPopup({ issues = [], summary, hasStarted, onIssueClick }) {
+  return (
+    <div className="popup-list">
+      <strong>{issues.length ? "待处理问题" : hasStarted ? "校验通过" : "等待开始"}</strong>
+      {!hasStarted && !issues.length ? <span>导入成绩单和考场后再显示校验结果。</span> : issues.length ? issues.slice(0, 4).map((issue) => (
+        <button type="button" className="popup-route-button" key={issue.message} onClick={() => onIssueClick?.(issue)}>
+          <span>{issue.emoji}</span>
+          <b>{issue.stepTitle}</b>
+          <small>{issue.detail || issue.summary}</small>
+        </button>
+      )) : <span>阻断 0 · 风险 {summary.warnings} · 复核 {summary.reviews}</span>}
+      {issues.length > 4 && <span>还有 {issues.length - 4} 条，请看当前步骤卡片</span>}
+    </div>
+  );
+}
+
+function HeroVisual({ activeStep, progressValue, totalStudents, enabledRooms, allErrors, examDate }) {
+  return (
+    <aside className="hero-visual" aria-label="排考状态预览">
+      <div className="visual-top">
+        <span><CalendarDays size={15} /> {formatShortDate(examDate)}</span>
+        <span className={allErrors ? "visual-alert" : "visual-ok"}>{allErrors ? `${allErrors} 项待处理` : "Ready"}</span>
+      </div>
+      <div className="visual-card main-visual-card">
+        <div className="visual-card-head">
+          <span>当前</span>
+          <strong>{activeStep}</strong>
+        </div>
+        <div className="visual-progress">
+          <span style={{ width: `${progressValue}%` }} />
+        </div>
+        <div className="seat-map" aria-hidden="true">
+          {Array.from({ length: 48 }).map((_, index) => (
+            <span key={index} className={index % 7 === 0 ? "seat accent" : index % 5 === 0 ? "seat cool" : "seat"} />
+          ))}
+        </div>
+      </div>
+      <div className="visual-mini-grid">
+        <div className="visual-card mini">
+          <UsersRound size={18} />
+          <strong>{totalStudents}</strong>
+          <span>Students</span>
+        </div>
+        <div className="visual-card mini">
+          <School size={18} />
+          <strong>{enabledRooms}</strong>
+          <span>Rooms</span>
+        </div>
+      </div>
+    </aside>
+  );
+}
+
+function CheckOption({ label, checked, onChange }) {
+  return (
+    <label className="check-option">
+      <input type="checkbox" checked={checked} onChange={(event) => onChange(event.target.checked)} />
+      {label}
+    </label>
+  );
+}
+
+function StudentRoster({ title, pool, students, onAdd, onChange, onDelete, onMove, showSubjectScores }) {
+  const [query, setQuery] = useState("");
+  const [classFilter, setClassFilter] = useState("");
+  const [comboFilter, setComboFilter] = useState("");
+  const [languageFilter, setLanguageFilter] = useState("");
+  const [expanded, setExpanded] = useState(false);
+  const classOptions = useMemo(() => uniqueValues(students.map((student) => student.className)), [students]);
+  const comboOptions = useMemo(() => buildComboOptions(students), [students]);
+  const languageOptions = useMemo(() => uniqueValues(students.map((student) => student.language)), [students]);
+  const visibleStudents = useMemo(
+    () => filterRosterStudents(students, { query, classFilter, comboFilter, languageFilter }),
+    [students, query, classFilter, comboFilter, languageFilter],
+  );
+  return (
+    <section className={`roster-card ${expanded ? "expanded" : ""}`}>
+      <div className="roster-header">
+        <div>
+          <h3>{title}</h3>
+          <span>{students.length ? `${visibleStudents.length}/${students.length} 人` : "未导入"}</span>
+        </div>
+        <div className="roster-tools">
+          <label className="roster-search">
+            <Search size={14} />
+            <input value={query} placeholder="搜姓名/考号/班级" onChange={(event) => setQuery(event.target.value)} />
+          </label>
+          <label className="roster-filter">
+            <Filter size={14} />
+            <select value={classFilter} onChange={(event) => setClassFilter(event.target.value)}>
+              <option value="">全部班级</option>
+              {classOptions.map((item) => <option key={item} value={item}>{item}</option>)}
+            </select>
+          </label>
+          <label className="roster-filter">
+            <Filter size={14} />
+            <select value={comboFilter} onChange={(event) => setComboFilter(event.target.value)}>
+              <option value="">全部组合</option>
+              {comboOptions.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+            </select>
+          </label>
+          <label className="roster-filter">
+            <Filter size={14} />
+            <select value={languageFilter} onChange={(event) => setLanguageFilter(event.target.value)}>
+              <option value="">全部语种</option>
+              {languageOptions.map((item) => <option key={item} value={item}>{item}</option>)}
+            </select>
+          </label>
+          <button type="button" className="icon-button" onClick={() => setExpanded((value) => !value)} title={expanded ? "收起名单" : "展开名单"}>
+            {expanded ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+          </button>
+          <button type="button" onClick={onAdd}><Plus size={16} /> 新增学生</button>
+        </div>
+      </div>
+      {!students.length ? (
+        <div className="roster-empty">
+          <div className="roster-empty-icon" aria-hidden="true">{pool === "物理" ? "⚛️" : "📜"}</div>
+          <strong>{pool}类名单等待导入</strong>
+          <span>导入成绩单后，这里会显示可编辑学生名单。</span>
+        </div>
+      ) : (
+      <div className={`table-wrap roster-table ${expanded ? "expanded" : ""}`}>
+        <table>
+          <thead>
+            <tr>
+              <th>姓名</th>
+              <th>考号</th>
+              <th>班级</th>
+              <th>首选科目</th>
+              <th>选科组合</th>
+              <th>总分</th>
+              <th>总分排名</th>
+              <th>数学</th>
+              <th>外语</th>
+              {showSubjectScores && <th>化学</th>}
+              {showSubjectScores && <th>地理</th>}
+              {showSubjectScores && <th>政治</th>}
+              {showSubjectScores && <th>生物</th>}
+              <th>操作</th>
+            </tr>
+          </thead>
+          <tbody>
+            {visibleStudents.map(({ student, index }) => (
+              <tr key={student.id || `${pool}-${index}`}>
+                <td><input value={student.name || ""} onChange={(event) => onChange(index, { name: event.target.value })} /></td>
+                <td><input value={student.id || ""} onChange={(event) => onChange(index, { id: event.target.value })} /></td>
+                <td><input value={student.className || ""} onChange={(event) => onChange(index, { className: event.target.value })} /></td>
+                <td><input value={student.firstSubject || pool} onChange={(event) => onChange(index, { firstSubject: event.target.value })} /></td>
+                <td><input value={student.comboRaw || ""} onChange={(event) => onChange(index, { comboRaw: event.target.value })} /></td>
+                <td><input type="number" value={student.totalScore ?? ""} onChange={(event) => onChange(index, { totalScore: Number(event.target.value) || 0 })} /></td>
+                <td><input type="number" value={Number.isFinite(student.totalRank) ? student.totalRank : ""} onChange={(event) => onChange(index, { totalRank: Number(event.target.value) || Number.POSITIVE_INFINITY })} /></td>
+                <td><input type="number" value={student.mathScore ?? ""} onChange={(event) => onChange(index, { mathScore: Number(event.target.value) || 0 })} /></td>
+                <td><input type="number" value={student.foreignScore ?? ""} onChange={(event) => onChange(index, { foreignScore: Number(event.target.value) || 0 })} /></td>
+                {showSubjectScores && <td><input type="number" value={student.subjectScores?.化学 ?? ""} onChange={(event) => onChange(index, { subjectScores: { ...student.subjectScores, 化学: Number(event.target.value) || 0 } })} /></td>}
+                {showSubjectScores && <td><input type="number" value={student.subjectScores?.地理 ?? ""} onChange={(event) => onChange(index, { subjectScores: { ...student.subjectScores, 地理: Number(event.target.value) || 0 } })} /></td>}
+                {showSubjectScores && <td><input type="number" value={student.subjectScores?.政治 ?? ""} onChange={(event) => onChange(index, { subjectScores: { ...student.subjectScores, 政治: Number(event.target.value) || 0 } })} /></td>}
+                {showSubjectScores && <td><input type="number" value={student.subjectScores?.生物 ?? ""} onChange={(event) => onChange(index, { subjectScores: { ...student.subjectScores, 生物: Number(event.target.value) || 0 } })} /></td>}
+                <td>
+                  <div className="record-actions">
+                    <button type="button" onClick={() => onMove(index)}><ArrowLeftRight size={16} /> 切换</button>
+                    <button type="button" onClick={() => onDelete(index)}><Trash2 size={16} /> 删除</button>
+                  </div>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      )}
+    </section>
+  );
+}
+
+function filterRosterStudents(students, filters) {
+  const query = String(filters?.query || "").trim().toLowerCase();
+  const classFilter = String(filters?.classFilter || "").trim();
+  const comboFilter = String(filters?.comboFilter || "").trim();
+  const languageFilter = String(filters?.languageFilter || "").trim();
+  return students
+    .map((student, index) => ({ student, index }))
+    .filter(({ student }) => {
+      const searchable = [student.name, student.id, student.className, student.comboRaw, student.language];
+      const matchesQuery = !query || searchable.some((value) => String(value || "").toLowerCase().includes(query));
+      const matchesClass = !classFilter || String(student.className || "") === classFilter;
+      const matchesCombo = !comboFilter || comboKeyForStudent(student) === comboFilter;
+      const matchesLanguage = !languageFilter || String(student.language || "") === languageFilter;
+      return matchesQuery && matchesClass && matchesCombo && matchesLanguage;
+    });
+}
+
+function GradeRosterOverview({ physicsStudents, historyStudents }) {
+  const [query, setQuery] = useState("");
+  const [poolFilter, setPoolFilter] = useState("");
+  const [subjectFilter, setSubjectFilter] = useState("");
+  const [comboFilter, setComboFilter] = useState("");
+  const [classFilter, setClassFilter] = useState("");
+  const [open, setOpen] = useState(false);
+  const students = useMemo(
+    () => [
+      ...physicsStudents.map((student) => ({ ...student, sourcePool: "物理" })),
+      ...historyStudents.map((student) => ({ ...student, sourcePool: "历史" })),
+    ],
+    [physicsStudents, historyStudents],
+  );
+  const classOptions = useMemo(() => uniqueValues(students.map((student) => student.className)), [students]);
+  const comboOptions = useMemo(() => buildComboOptions(students), [students]);
+  const visible = useMemo(() => {
+    const term = query.trim().toLowerCase();
+    return students.filter((student) => {
+      const subjects = getElectiveSubjects(student);
+      const matchesQuery = !term || [student.name, student.id, student.className, student.comboRaw, student.language].some((value) => String(value || "").toLowerCase().includes(term));
+      const matchesPool = !poolFilter || student.sourcePool === poolFilter;
+      const matchesSubject = !subjectFilter || subjects.includes(subjectFilter);
+      const matchesCombo = !comboFilter || comboKeyForStudent(student) === comboFilter;
+      const matchesClass = !classFilter || String(student.className || "") === classFilter;
+      return matchesQuery && matchesPool && matchesSubject && matchesCombo && matchesClass;
+    });
+  }, [students, query, poolFilter, subjectFilter, comboFilter, classFilter]);
+
+  if (!students.length) return null;
+  const rows = visible;
+  return (
+    <>
+      <section className="overview-launch-card">
+        <div>
+          <h3>全年级筛选总览</h3>
+          <span>跨物理类/历史类核对单科、组合、班级。</span>
+        </div>
+        <button type="button" className="primary" onClick={() => setOpen(true)}><Maximize2 size={16} /> 打开总览</button>
+      </section>
+      {open && (
+        <div className="fullscreen-overlay" role="dialog" aria-modal="true">
+          <section className="fullscreen-card">
+            <div className="fullscreen-head">
+              <div>
+                <h3>全年级筛选总览</h3>
+                <span>{visible.length}/{students.length} 人</span>
+              </div>
+              <button type="button" onClick={() => setOpen(false)}><Minimize2 size={16} /> 收起</button>
+            </div>
+            <div className="roster-tools modal-tools">
+              <label className="roster-search">
+                <Search size={14} />
+                <input value={query} placeholder="搜姓名/考号/班级" onChange={(event) => setQuery(event.target.value)} />
+              </label>
+              <label className="roster-filter">
+                <Filter size={14} />
+                <select value={poolFilter} onChange={(event) => setPoolFilter(event.target.value)}>
+                  <option value="">物理+历史</option>
+                  <option value="物理">物理类</option>
+                  <option value="历史">历史类</option>
+                </select>
+              </label>
+              <label className="roster-filter">
+                <Filter size={14} />
+                <select value={subjectFilter} onChange={(event) => setSubjectFilter(event.target.value)}>
+                  <option value="">全部再选科</option>
+                  {ELECTIVE_SUBJECTS.map((subject) => <option key={subject} value={subject}>{subject}</option>)}
+                </select>
+              </label>
+              <label className="roster-filter">
+                <Filter size={14} />
+                <select value={comboFilter} onChange={(event) => setComboFilter(event.target.value)}>
+                  <option value="">全部组合</option>
+                  {comboOptions.map((item) => <option key={item.value} value={item.value}>{item.label}</option>)}
+                </select>
+              </label>
+              <label className="roster-filter">
+                <Filter size={14} />
+                <select value={classFilter} onChange={(event) => setClassFilter(event.target.value)}>
+                  <option value="">全部班级</option>
+                  {classOptions.map((item) => <option key={item} value={item}>{item}</option>)}
+                </select>
+              </label>
+            </div>
+            <div className="table-wrap roster-table fullscreen-table">
+              <table>
+                <thead>
+                  <tr>
+                    <th>类别</th>
+                    <th>班级</th>
+                    <th>姓名</th>
+                    <th>考号</th>
+                    <th>规范组合</th>
+                    <th>原始组合</th>
+                    <th>语种</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((student) => (
+                    <tr key={`${student.sourcePool}-${student.id}`}>
+                      <td>{student.sourcePool}</td>
+                      <td>{student.className}</td>
+                      <td>{student.name}</td>
+                      <td>{student.id}</td>
+                      <td>{comboLabelForStudent(student)}</td>
+                      <td>{student.comboRaw}</td>
+                      <td>{student.language}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </section>
+        </div>
+      )}
+    </>
+  );
+}
+
+function buildComboOptions(students) {
+  const options = new Map();
+  for (const student of students || []) {
+    const value = comboKeyForStudent(student);
+    if (!value) continue;
+    options.set(value, comboLabelForStudent(student));
+  }
+  return [...options.entries()]
+    .map(([value, label]) => ({ value, label }))
+    .sort((a, b) => comboSortRank(a.value) - comboSortRank(b.value) || a.label.localeCompare(b.label, "zh-Hans-CN", { numeric: true }));
+}
+
+function comboKeyForStudent(student) {
+  const first = normalizeFirstSubject(student.firstSubject || student.pool);
+  const electives = getElectiveSubjects(student);
+  if (!first && electives.length !== 2) return "";
+  const pair = normalizeElectivePair(electives);
+  return [first || "未识别", pair || String(student.comboRaw || "").trim()].filter(Boolean).join("|");
+}
+
+function comboLabelForStudent(student) {
+  const key = comboKeyForStudent(student);
+  if (!key) return String(student.comboRaw || "");
+  const [first, pair] = key.split("|");
+  return `${shortFirstSubject(first)}${shortElectivePair(pair)}`;
+}
+
+function normalizeFirstSubject(value) {
+  const text = String(value || "");
+  if (text.includes("物理")) return "物理";
+  if (text.includes("历史")) return "历史";
+  return "";
+}
+
+function normalizeElectivePair(subjects) {
+  const key = [...subjects].sort((a, b) => ELECTIVE_SUBJECTS.indexOf(a) - ELECTIVE_SUBJECTS.indexOf(b)).join("");
+  return DEFAULT_COMBO_ORDER.includes(key) ? key : key;
+}
+
+function shortFirstSubject(subject) {
+  if (subject === "物理") return "物";
+  if (subject === "历史") return "史";
+  return subject;
+}
+
+function shortElectivePair(pair) {
+  return String(pair || "")
+    .replace("化学", "化")
+    .replace("地理", "地")
+    .replace("政治", "政")
+    .replace("生物", "生");
+}
+
+function comboSortRank(value) {
+  const [first, pair] = String(value || "").split("|");
+  const firstRank = first === "物理" ? 0 : first === "历史" ? 1 : 2;
+  const pairRank = DEFAULT_COMBO_ORDER.indexOf(pair);
+  return firstRank * 100 + (pairRank >= 0 ? pairRank : 90);
+}
+
+function uniqueValues(values) {
+  return Array.from(new Set((values || []).map((value) => String(value || "").trim()).filter(Boolean))).sort((a, b) =>
+    a.localeCompare(b, "zh-Hans-CN", { numeric: true }),
+  );
+}
+
+function buildLanguageStats(students, minorRooms) {
+  const counts = new Map();
+  for (const student of students) {
+    const language = student.language || "英语";
+    counts.set(language, (counts.get(language) || 0) + 1);
+  }
+  return ["英语", ...LANGUAGE_SUBJECTS]
+    .filter((language) => counts.has(language))
+    .map((language) => ({
+      language,
+      count: counts.get(language) || 0,
+      roomNo: minorRooms[language]?.roomNo || "",
+      roomName: minorRooms[language]?.roomName || "",
+    }));
+}
+
+function buildRoomStats(rooms) {
+  const enabled = rooms.filter((room) => room.enabled);
+  const capacities = enabled.map((room) => Number(room.capacity) || 0);
+  return {
+    enabled: enabled.length,
+    capacity: capacities.reduce((sum, value) => sum + value, 0),
+    maxCapacity: capacities.length ? Math.max(...capacities) : 0,
+  };
+}
+
+function findDuplicateDoorNos(rooms) {
+  const counts = new Map();
+  for (const room of rooms || []) {
+    if (room.enabled === false) continue;
+    const doorNo = String(room.doorNo || "").trim();
+    if (!doorNo) continue;
+    counts.set(doorNo, (counts.get(doorNo) || 0) + 1);
+  }
+  return new Set([...counts.entries()].filter(([, count]) => count > 1).map(([doorNo]) => doorNo));
+}
+
+function extractDoorNosFromErrors(errors = []) {
+  const doorNos = new Set();
+  for (const error of errors) {
+    for (const match of String(error).matchAll(/门牌\s*([^\s，,。；;]+)/g)) {
+      if (match[1]) doorNos.add(match[1].trim());
+    }
+  }
+  return doorNos;
+}
+
+function RoomFixPanel({ errors, duplicateDoorNos, conflictDoorNos, onGoMinor }) {
+  const hasDuplicateDoors = duplicateDoorNos.size > 0;
+  const hasConflictDoors = conflictDoorNos.size > 0;
+  if (!errors.length && !hasDuplicateDoors) return null;
+  return (
+    <div className="error-box room-fix-panel">
+      <strong>考场信息需要修正</strong>
+      <p>这通常不是你手填错了，而是导入的门牌模板或小语种考场和当前排考规则发生了冲突。</p>
+      {hasDuplicateDoors && <p>普通考场里重复的门牌号：{[...duplicateDoorNos].join("、")}。下方对应行已高亮，直接改门牌号即可。</p>}
+      {hasConflictDoors && <p>本次报错涉及门牌：{[...conflictDoorNos].join("、")}。如果是小语种占用了同一时段教室，请去“小语种”页调整。</p>}
+      {errors.length > 0 && (
+        <ul>
+          {errors.slice(0, 4).map((error) => <li key={error}>{error}</li>)}
+        </ul>
+      )}
+      <div className="actions">
+        <button type="button" onClick={onGoMinor}>去改小语种考场</button>
+      </div>
+    </div>
+  );
+}
+
+function dockTipLabel(title) {
+  if (title === "导入成绩单") return "导入成绩单";
+  if (title === "确认考场") return "管理考场";
+  if (title === "小语种") return "设置小语种";
+  if (title === "考试时间") return "填写时间";
+  if (title === "全面预览") return "查看预览";
+  if (title === "导出") return "导出材料";
+  return title;
+}
+
+function createBlankStudent(pool) {
+  return {
+    id: "",
+    name: "",
+    className: "",
+    firstSubject: pool,
+    pool,
+    comboRaw: "",
+    totalRank: Number.POSITIVE_INFINITY,
+    totalScore: 0,
+    mathScore: 0,
+    foreignScore: 0,
+    language: "英语",
+    languageScore: 0,
+    subjectScores: { 化学: Number.NaN, 地理: Number.NaN, 政治: Number.NaN, 生物: Number.NaN },
+    original: {},
+    rowNumber: 0,
+  };
+}
+
+function patchStudent(student, patch, pool) {
+  const next = {
+    ...student,
+    ...patch,
+    pool,
+    subjectScores: {
+      化学: student.subjectScores?.化学 ?? Number.NaN,
+      地理: student.subjectScores?.地理 ?? Number.NaN,
+      政治: student.subjectScores?.政治 ?? Number.NaN,
+      生物: student.subjectScores?.生物 ?? Number.NaN,
+      ...(patch.subjectScores || {}),
+    },
+  };
+  return next;
+}
+
+function PreviewPanel({ tabs, activeKey, onChange }) {
+  const active = tabs.find((tab) => tab.key === activeKey) || tabs[0];
+  const [showAll, setShowAll] = useState(false);
+  const [query, setQuery] = useState("");
+  const [filters, setFilters] = useState({});
+  const [expanded, setExpanded] = useState(false);
+  const [printSettings, setPrintSettings] = useState({
+    orientation: "landscape",
+    fontSize: 11,
+    rowHeight: 22,
+    zoom: 92,
+  });
+  useEffect(() => {
+    setShowAll(false);
+    setQuery("");
+    setFilters({});
+    setExpanded(false);
+  }, [activeKey]);
+  const activeRows = active?.rows || [];
+  const columns = activeRows.length ? Object.keys(activeRows[0]) : [];
+  const filterColumns = getPreviewFilterColumns(columns);
+  const filteredRows = useMemo(() => filterTableRows(activeRows, query, filters), [activeRows, query, filters]);
+  if (!active) return null;
+  const rows = expanded || showAll ? filteredRows : filteredRows.slice(0, 80);
+  const displayColumns = rows.length ? Object.keys(rows[0]).filter((column) => !column.startsWith("__")) : columns.filter((column) => !column.startsWith("__"));
+  const applyA4Fit = () => setPrintSettings(getA4PreviewSettings(displayColumns.length, filteredRows.length));
+  return (
+    <div
+      className={`preview-panel ${expanded ? "excel-mode" : ""}`}
+      style={{
+        "--preview-font-size": `${printSettings.fontSize}px`,
+        "--preview-row-height": `${printSettings.rowHeight}px`,
+        "--preview-zoom": printSettings.zoom / 100,
+      }}
+    >
+      <div className="preview-sheet-meta">
+        <div>
+          <strong>{active.label}</strong>
+          <small>像查看 Excel 一样核对这一张表；可筛选、适配 A4、调整打印样式。</small>
+        </div>
+        <span>{filteredRows.length}/{activeRows.length} 行</span>
+      </div>
+      <div className="table-toolbar preview-toolbar">
+        <label className="table-search">
+          <Search size={15} />
+          <input value={query} placeholder="搜索当前表：姓名、考号、班级、考场..." onChange={(event) => setQuery(event.target.value)} />
+        </label>
+        {filterColumns.map((column) => (
+          <label className="table-filter" key={column}>
+            <Filter size={14} />
+            <select
+              value={filters[column] || ""}
+              onChange={(event) => setFilters((current) => ({ ...current, [column]: event.target.value }))}
+            >
+              <option value="">{column}</option>
+              {uniqueValues(activeRows.map((row) => row[column])).map((item) => <option key={item} value={item}>{item}</option>)}
+            </select>
+          </label>
+        ))}
+        <button type="button" onClick={applyA4Fit}>适配 A4</button>
+        <label className="table-filter compact-control">
+          方向
+          <select value={printSettings.orientation} onChange={(event) => setPrintSettings((current) => ({ ...current, orientation: event.target.value }))}>
+            <option value="landscape">横向</option>
+            <option value="portrait">纵向</option>
+          </select>
+        </label>
+        <label className="table-filter compact-control">
+          字号
+          <input type="number" min="8" max="16" value={printSettings.fontSize} onChange={(event) => setPrintSettings((current) => ({ ...current, fontSize: Number(event.target.value) || current.fontSize }))} />
+        </label>
+        <label className="table-filter compact-control">
+          行高
+          <input type="number" min="16" max="36" value={printSettings.rowHeight} onChange={(event) => setPrintSettings((current) => ({ ...current, rowHeight: Number(event.target.value) || current.rowHeight }))} />
+        </label>
+        <label className="table-filter compact-control">
+          缩放
+          <input type="number" min="55" max="120" value={printSettings.zoom} onChange={(event) => setPrintSettings((current) => ({ ...current, zoom: Number(event.target.value) || current.zoom }))} />
+        </label>
+        <button type="button" className="icon-button" onClick={() => setExpanded((value) => !value)} title={expanded ? "退出 Excel 预览" : "打开 Excel 预览"}>
+          {expanded ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+        </button>
+      </div>
+      <div className="preview-note">
+        {active.label}：筛选后 {filteredRows.length}/{activeRows.length} 行，当前显示 {rows.length} 行。
+        {filteredRows.length > 80 && (
+          <button type="button" className="link-button" onClick={() => setShowAll(!showAll)}>
+            {showAll ? "收起到前80行" : "显示全部"}
+          </button>
+        )}
+        {(query || Object.values(filters).some(Boolean)) && (
+          <button type="button" className="link-button" onClick={() => { setQuery(""); setFilters({}); }}>清空筛选</button>
+        )}
+        <button type="button" className="link-button" onClick={() => window.print()}>打印当前预览</button>
+      </div>
+      <div className={`excel-canvas ${printSettings.orientation}`}>
+        <div className="excel-ribbon">
+          <span>{active.label}</span>
+          <small>A4 {printSettings.orientation === "landscape" ? "横向" : "纵向"} · {printSettings.fontSize}px · 行高 {printSettings.rowHeight}px · {printSettings.zoom}%</small>
+        </div>
+        <div className={`excel-page ${printSettings.orientation}`} onDoubleClick={() => setExpanded(true)}>
+          <div className={`table-wrap preview-table ${expanded ? "expanded" : ""}`}>
+            <table>
+              <thead>
+                <tr>{displayColumns.map((column) => <th key={column}>{column}</th>)}</tr>
+              </thead>
+              <tbody>
+                {rows.map((row, index) => (
+                  <tr key={index}>
+                    {displayColumns.map((column) => <td key={column}>{row[column]}</td>)}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function getA4PreviewSettings(columnCount, rowCount) {
+  const wide = columnCount >= 10;
+  const dense = rowCount > 45;
+  return {
+    orientation: wide ? "landscape" : "portrait",
+    fontSize: wide || dense ? 9 : 11,
+    rowHeight: dense ? 18 : 22,
+    zoom: wide ? 82 : 92,
+  };
+}
+
+function getPreviewFilterColumns(columns) {
+  const preferred = ["级别", "班级", "班级分组", "考场号", "门牌号", "考试类型", "科目", "首选科目", "外语语种"];
+  return preferred.filter((column) => columns.includes(column)).slice(0, 4);
+}
+
+function filterTableRows(rows, query, filters = {}) {
+  const term = String(query || "").trim().toLowerCase();
+  const activeFilters = Object.entries(filters).filter(([, value]) => String(value || "").trim());
+  return rows.filter((row) => {
+    const matchesQuery = !term || Object.values(row).some((value) => String(value || "").toLowerCase().includes(term));
+    const matchesFilters = activeFilters.every(([column, value]) => String(row[column] ?? "") === String(value));
+    return matchesQuery && matchesFilters;
+  });
+}
+
+function buildPreviewTabs(schedule, rooms, scheduleMode, validationReport = []) {
+  if (!schedule.allRows.length) return [];
+  const roomDetails = buildRoomDetailRows(schedule);
+  const classRows = buildClassPreviewRows(schedule.allRows);
+  const tabs = [
+    { key: "validation", label: "校验报告", rows: validationReport },
+    { key: "doors", label: "门牌人数总览", rows: buildDoorRowsForPreview(schedule, rooms) },
+    { key: "admin", label: "管理总表", rows: buildAdminRows(schedule.allRows) },
+    { key: "classes", label: "班主任表", rows: classRows },
+    { key: "roomDetails", label: "考场信息表", rows: buildRoomPrintRows(schedule) },
+    { key: "main", label: "语数物/历", rows: assignmentRows(schedule.mainAssignments, { publicOnly: true }) },
+    { key: "foreign", label: "外语", rows: assignmentRows(schedule.foreignAssignments, { publicOnly: true }) },
+  ];
+  if (scheduleMode === SCHEDULE_MODES.THREE_DAY_SPLIT) {
+    for (const subject of ["化学", "地理", "政治", "生物"]) {
+      tabs.push({ key: subject, label: subject, rows: buildSubjectPrintRows(schedule, subject) });
+    }
+  } else {
+    tabs.push({ key: "elective", label: "四选二", rows: assignmentRows(schedule.electiveAssignments, { publicOnly: true }) });
+  }
+  return tabs.filter((tab) => tab.rows.length);
+}
+
+function buildDoorRowsForPreview(schedule, rooms) {
+  return rooms.map((room) => {
+    const main = schedule.mainAssignments.filter((item) => item.roomNo === room.roomNo);
+    const foreign = schedule.foreignAssignments.filter((item) => item.roomNo === room.roomNo);
+    const elective = schedule.electiveAssignments.filter((item) => item.roomNo === room.roomNo);
+    const countSubject = (subject) => schedule.subjectAssignments.filter((item) => item.roomNo === room.roomNo && item.subjectLabel === subject).length;
+    return {
+      门牌号: room.doorNo,
+      教室: room.roomName,
+      考场号: room.roomNo,
+      语数物历: main.length || "",
+      外语: foreign.length || "",
+      化学: countSubject("化学") || "",
+      地理: countSubject("地理") || "",
+      政治: countSubject("政治") || "",
+      生物: countSubject("生物") || "",
+      四选二: elective.length || "",
+      人数: room.capacity,
+    };
+  }).filter((row) => row.语数物历 || row.外语 || row.化学 || row.地理 || row.政治 || row.生物 || row.四选二);
+}
+
+function buildClassPreviewRows(rows) {
+  return rows
+    .slice()
+    .sort((a, b) => String(a.班级).localeCompare(String(b.班级), "zh-Hans-CN", { numeric: true }) || String(a.考号).localeCompare(String(b.考号), "zh-Hans-CN", { numeric: true }))
+    .map((row) => ({ 班级分组: row.班级, ...buildPrintRows([row])[0] }));
+}
+
+function ValidationReport({ rows, summary }) {
+  return (
+    <section className="issue-panel">
+      <div className="section-heading">
+        <h3>校验报告</h3>
+        <span>阻断 {summary.blockers} · 风险 {summary.warnings} · 复核 {summary.reviews}</span>
+      </div>
+      <div className="validation-badges">
+        <span className={summary.blockers ? "danger" : "success"}>{summary.blockers ? "有硬错误，暂不能导出" : "硬校验通过"}</span>
+        <span className={summary.warnings ? "warning" : "success"}>{summary.warnings ? `${summary.warnings} 条风险提醒` : "无风险提醒"}</span>
+        <span>{summary.reviews} 条人工复核</span>
+      </div>
+      <div className="table-wrap issue-table">
+        <table>
+          <thead>
+            <tr>
+              <th>级别</th>
+              <th>项目</th>
+              <th>结果</th>
+              <th>详情</th>
+              <th>建议处理</th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.slice(0, 80).map((row, index) => (
+              <tr key={`${row.级别}-${row.项目}-${index}`} className={validationRowClass(row.级别)}>
+                <td>{row.级别}</td>
+                <td>{row.项目}</td>
+                <td>{row.结果}</td>
+                <td>{row.详情}</td>
+                <td>{row.建议处理}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </section>
+  );
+}
+
+function validationRowClass(level) {
+  if (level === "阻断错误") return "validation-blocker";
+  if (level === "风险提醒") return "validation-warning";
+  return "validation-review";
+}
+
+function StudentSearch({ query, onQuery, rows }) {
+  const printRows = buildPrintRows(rows);
+  return (
+    <section className="search-panel">
+      <div className="section-heading">
+        <h3>学生查询</h3>
+        <span>按姓名、考号或班级快速核对</span>
+      </div>
+      <label className="search-box">
+        <Search size={18} />
+        <input value={query} placeholder="输入姓名、考号、班级..." onChange={(event) => onQuery(event.target.value)} />
+      </label>
+      {query.trim() && (
+        <div className="table-wrap issue-table">
+          <table>
+            <thead>
+              <tr>
+                <th>姓名</th>
+                <th>考号</th>
+                <th>语数物/历</th>
+                <th>外语</th>
+                <th>化学</th>
+                <th>地理</th>
+                <th>政治</th>
+                <th>生物</th>
+              </tr>
+            </thead>
+            <tbody>
+              {printRows.map((row) => (
+                <tr key={row.考号}>
+                  <td>{row.__className || ""}</td>
+                  <td>{row.姓名}</td>
+                  <td>{row.考号}</td>
+                  <td>{row.语数物历考场 ? `${row.语数物历考场}/${row.语数物历座位}` : ""}</td>
+                  <td>{row.外语 || ""}</td>
+                  <td>{row.化学 || ""}</td>
+                  <td>{row.地理 || ""}</td>
+                  <td>{row.政治 || ""}</td>
+                  <td>{row.生物 || ""}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function buildIssueRows(errors) {
+  return errors.map((message) => ({
+    level: "阻断",
+    message,
+    action: suggestAction(message),
+  }));
+}
+
+function createIssueRoute(message) {
+  const text = String(message || "");
+  if (text.includes("缺少物理类学生成绩单")) {
+    return issueRoute(0, "导入", "⬆️", text, "再导入一份物理类成绩单", "当前只有历史类或空名单");
+  }
+  if (text.includes("缺少历史类学生成绩单")) {
+    return issueRoute(0, "导入", "⬆️", text, "再导入一份历史类成绩单", "当前只有物理类或空名单");
+  }
+  if (text.includes("重复考号")) {
+    return issueRoute(0, "导入", "⬆️", text, "在名单里搜索这个考号并删除/改正重复项", "同一个考号不能出现两次");
+  }
+  if (text.includes("再选科不是两门") || text.includes("选了") || text.includes("成绩为空")) {
+    return issueRoute(0, "导入", "⬆️", text, "去名单里改选科组合或补齐单科成绩", "这类错误都在学生名单里修");
+  }
+  const language = LANGUAGE_SUBJECTS.find((item) => text.includes(item));
+  if (language && text.includes("未指定外语考试考场")) {
+    return issueRoute(2, "小语种", "💬", text, `设置${language}考场`, `${language}学生需要单独填写考场号、门牌号和教室`);
+  }
+  if (text.includes("小语种") || text.includes("日语") || text.includes("俄语") || text.includes("西班牙语") || text.includes("法语") || text.includes("德语") || text.includes("未指定") || text.includes("外语时段")) {
+    return issueRoute(2, "小语种", "💬", text, "设置小语种考场", text || "这里要补考场号、门牌号、教室");
+  }
+  if (text.includes("缺少普通考场清单")) {
+    return issueRoute(1, "考场", "🏫", text, "先导入旧门牌表或套用默认模板", "当前没有启用的普通考场，所以还不能计算容量和座位");
+  }
+  if (text.includes("英语普通考场容量不足")) {
+    return issueRoute(1, "考场", "🏫", text, "新增英语考场或扩大现有容量", text);
+  }
+  if (text.includes("四选二普通考场容量不足")) {
+    return issueRoute(1, "考场", "🏫", text, "补充四选二可用考场", text);
+  }
+  if (text.includes("考试+自习普通考场容量不足")) {
+    const subject = ["化学", "地理", "政治", "生物"].find((item) => text.includes(item)) || "该科";
+    return issueRoute(1, "考场", "🏫", text, `给${subject}补考场或加容量`, text);
+  }
+  if (text.includes("普通考场容量不足")) {
+    return issueRoute(1, "考场", "🏫", text, "新增考场或提升容量", text);
+  }
+  if (text.includes("门牌") || text.includes("考场") || text.includes("容量") || text.includes("座位") || text.includes("同时用于")) {
+    if (text.includes("同时用于")) {
+      return issueRoute(1, "考场", "🏫", text, "处理门牌/教室冲突", text);
+    }
+    if (text.includes("座重复")) {
+      return issueRoute(1, "考场", "🏫", text, "处理同考场座位重复", text);
+    }
+    if (text.includes("门牌")) {
+      return issueRoute(1, "考场", "🏫", text, "修正门牌号或教室", text);
+    }
+    return issueRoute(1, "考场", "🏫", text, "调整考场号或容量", text);
+  }
+  if (text.includes("日期") || text.includes("时间") || text.includes("时段")) {
+    return issueRoute(3, "时间", "🕘", text, "去检查考试时间", "这里改日期和每场开始/结束时间");
+  }
+  if (text.includes("漏排") || text.includes("重复排") || text.includes("混入") || text.includes("混场")) {
+    return issueRoute(4, "预览", "🔎", text, "去看校验报告", "这里看完整校验和导出前摘要");
+  }
+  return issueRoute(4, "预览", "🔎", text, "去看校验报告", "这里看完整校验和导出前摘要");
+}
+
+function issueRoute(stepIndex, stepTitle, emoji, message, summary, detail) {
+  return {
+    stepIndex,
+    stepTitle,
+    emoji,
+    message,
+    summary,
+    detail: detail || message,
+  };
+}
+
+function getStatusLabel(status) {
+  if (status === "done") return "已就绪";
+  if (status === "error") return "需处理";
+  return "待进行";
+}
+
+function suggestAction(message) {
+  if (message.includes("容量不足") || (message.includes("缺") && message.includes("座位"))) return "在“确认考场”里新增考场或调整容量";
+  if (message.includes("小语种") || message.includes("未指定")) return "在“小语种”步骤里填写考场号、门牌号和教室";
+  if (message.includes("再选科") || message.includes("选了")) return "在“导入成绩单”的名单表里修正选科组合或单科成绩";
+  if (message.includes("重复考号")) return "在名单表中搜索该考号，删除或修正重复学生";
+  if (message.includes("缺少")) return "检查导入表头，或在名单表中补齐学生信息";
+  return "按提示修正后重新查看预览";
+}
+
+function searchStudents(rows, query) {
+  const term = query.trim().toLowerCase();
+  if (!term) return [];
+  return rows
+    .filter((row) => [row.姓名, row.考号, row.班级].some((value) => String(value || "").toLowerCase().includes(term)))
+    .slice(0, 50);
+}
+
+function assignmentRows(assignments, options = {}) {
+  return assignments.map((item) => ({
+    考试类型: item.plan === "主考" ? "语数物历" : item.plan,
+    考场号: item.status === "自习" ? `${item.roomNo}自习室` : item.roomNo,
+    门牌号: item.doorNo,
+    教室: item.roomName,
+    座位号: item.seatNo,
+    班级: item.className,
+    姓名: item.name,
+    考号: item.studentId,
+    首选科目: item.firstSubject,
+    选科组合: item.comboRaw,
+    外语语种: item.language,
+    ...(options.publicOnly ? {} : { 状态: item.status || "", 该科分数: item.subjectScore ?? "" }),
+  }));
+}
+
+function formatShortDate(dateString) {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(dateString || "");
+  if (!match) return "未设置";
+  return `${Number(match[2])}.${Number(match[3])}`;
+}
+
+function formatRecordTime(value) {
+  if (!value) return "本机保存";
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "本机保存";
+  const yyyy = date.getFullYear();
+  const mm = String(date.getMonth() + 1).padStart(2, "0");
+  const dd = String(date.getDate()).padStart(2, "0");
+  const hour = String(date.getHours()).padStart(2, "0");
+  const minute = String(date.getMinutes()).padStart(2, "0");
+  return `${yyyy}-${mm}-${dd} ${hour}:${minute}`;
+}
+
+createRoot(document.getElementById("root")).render(<App />);
