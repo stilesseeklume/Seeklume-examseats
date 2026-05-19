@@ -1,5 +1,6 @@
 import {
   buildPrintRows,
+  buildDoorRows,
   buildRoomSummaryRows,
   buildRoomPrintRows,
   buildSchedule,
@@ -20,9 +21,9 @@ const physicsText = [
 ].join("\n");
 
 const historyText = [
-  "班级\t姓名\t考号\t首选科目\t选科组合\t总分市排名\t总分\t数学\t英语\t化学\t地理\t政治\t生物",
-  "3班\t历化生01\tH001\t历史\t历史 化学 生物\t5\t650\t130\t125\t90\t\t\t89",
-  "3班\t历政地02\tH002\t历史\t历史 政治 地理\t6\t640\t128\t122\t\t86\t91\t",
+  "班级\t姓名\t考号\t首选科目\t选科组合\t总分市排名\t总分\t数学\t英语\t化学\t地理\t政治\t生物\t日语",
+  "3班\t历化生01\tH001\t历史\t历史 化学 生物\t5\t650\t130\t\t90\t\t\t89\t126",
+  "3班\t历政地02\tH002\t历史\t历史 政治 地理\t6\t640\t128\t\t\t86\t91\t\t124",
   "4班\t历化政03\tH003\t历史\t历史 化学 政治\t7\t630\t126\t120\t87\t\t88\t",
   "4班\t历生地04\tH004\t历史\t历史 生物 地理\t8\t620\t124\t118\t\t84\t\t86",
 ].join("\n");
@@ -77,10 +78,12 @@ for (const subject of ELECTIVE_SUBJECTS) {
 }
 
 assertTwoExamTwoSelf(splitSchedule.subjectAssignments, [...physics.students, ...history.students]);
+assertForeignLanguagesDoNotMixRooms(splitSchedule.foreignAssignments);
 assertPrintRowsHideScores(buildPrintRows(splitSchedule.allRows), "班主任表");
 assertPrintRowsHideScores(buildSubjectPrintRows(splitSchedule, "化学"), "科目表");
 assertPrintRowsHideScores(buildRoomPrintRows(splitSchedule), "考场信息表");
 assertSelfStudyRoomsAreNumeric(buildPrintRows(splitSchedule.allRows));
+assertForeignDoorSummary(buildDoorRows(splitSchedule, rooms));
 
 const validationReport = buildValidationReport({ schedule: splitSchedule, rooms, importErrors: [] });
 const validationSummary = summarizeValidationReport(validationReport);
@@ -160,6 +163,29 @@ function assertSelfStudyRoomsAreNumeric(rows) {
     .filter((value) => String(value).includes("自习"));
   if (selfStudyCells.length) {
     throw new Error("教师打印表自习考场应只显示数字，不应保留“自习室”字样");
+  }
+}
+
+function assertForeignDoorSummary(rows) {
+  const foreignCells = rows.map((row) => String(row.外语 || ""));
+  if (!foreignCells.some((cell) => cell.includes("英语"))) {
+    throw new Error("门牌人数总览应显示英语人数明细");
+  }
+  if (!foreignCells.some((cell) => cell.includes("日语"))) {
+    throw new Error("门牌人数总览应显示小语种人数明细");
+  }
+}
+
+function assertForeignLanguagesDoNotMixRooms(assignments) {
+  const byRoom = new Map();
+  for (const item of assignments) {
+    if (!byRoom.has(item.roomNo)) byRoom.set(item.roomNo, new Set());
+    byRoom.get(item.roomNo).add(item.subjectLabel);
+  }
+  for (const [roomNo, languages] of byRoom.entries()) {
+    if (languages.size > 1) {
+      throw new Error(`外语第${roomNo}考场混入多个语种：${[...languages].join("、")}`);
+    }
   }
 }
 

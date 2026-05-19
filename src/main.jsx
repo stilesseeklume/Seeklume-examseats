@@ -20,12 +20,9 @@ import {
   FileDown,
   FileSpreadsheet,
   Globe2,
-  History,
-  Info,
   Image,
   Plus,
   School,
-  Sparkles,
   Trash2,
   Upload,
   UsersRound,
@@ -34,6 +31,7 @@ import {
 import {
   buildRoomDetailRows,
   buildAdminRows,
+  buildDoorRows,
   buildPrintRows,
   buildRoomPrintRows,
   buildRoomSummaryRows,
@@ -57,6 +55,8 @@ import {
   summarizeValidationReport,
 } from "./scheduler.js";
 import { parseRoomImportSource, parseStudentImportSource } from "./importers.js";
+import { HomeLanding } from "./landing/HomeLanding.jsx";
+import { AboutModal } from "./landing/AboutModal.jsx";
 import "./styles.css";
 
 const TEMPLATE_TIMES = [
@@ -163,7 +163,7 @@ function App() {
   const visibleErrors = hasStarted ? allErrors : [];
   const routedIssues = useMemo(() => visibleErrors.map(createIssueRoute), [visibleErrors]);
   const activeStepIssues = useMemo(() => routedIssues.filter((issue) => issue.stepIndex === activeStep), [routedIssues, activeStep]);
-  const configuredMinorRooms = minorLanguages.filter((language) => minorRooms[language]?.roomNo).length;
+  const configuredMinorRooms = minorLanguages.filter((language) => minorRooms[language]?.roomNos || minorRooms[language]?.roomNo).length;
   const languageStats = useMemo(() => buildLanguageStats([...physics.students, ...history.students], minorRooms), [physics.students, history.students, minorRooms]);
   const roomStats = useMemo(() => buildRoomStats(rooms), [rooms]);
   const duplicateDoorNos = useMemo(() => findDuplicateDoorNos(rooms), [rooms]);
@@ -284,12 +284,10 @@ function App() {
   const applyMinorRoomRecommendation = () => {
     const next = { ...minorRooms };
     for (const item of minorRoomRecommendation.items) {
-      if (!item.room) continue;
+      if (!item.rooms.length) continue;
       next[item.language] = {
         ...next[item.language],
-        roomNo: item.room.roomNo,
-        doorNo: item.room.doorNo || "",
-        roomName: item.room.roomName || "",
+        roomNos: item.rooms.map((room) => room.roomNo).join(","),
       };
     }
     setMinorRooms(next);
@@ -575,43 +573,42 @@ function App() {
       ),
     },
     {
-      title: "小语种",
+      title: "外语安排",
       shortTitle: "语种",
       emoji: "💬",
       icon: <FileSpreadsheet size={18} />,
-      status: hasStarted ? (minorLanguages.every((language) => minorRooms[language]?.roomNo) ? "done" : minorLanguages.length ? "idle" : "done") : "idle",
-      note: "小语种外语单独安排。",
+      status: hasStarted ? "done" : "idle",
+      note: "英语先排，其他语种接着排；语种之间不混考场。",
       content: (
         <>
-          <p className="muted">小语种只用于外语考试，不限制容量。座位号按对应语种成绩倒序生成。小语种可使用普通考场号，例如 23；其他科目仍可把 23 当普通考场使用。</p>
+          <p className="muted">外语按语种分组排座：英语先用普通考场，日语、俄语等接着用后续考场。每个考场默认容量 40，可在“确认考场”里改；语种之间不会混在同一考场。</p>
           <div className="minor-recommend-card">
             <div>
-              <strong>推荐考场</strong>
+              <strong>外语考场建议</strong>
               <span>{minorRoomRecommendation.summary}</span>
             </div>
-            <button type="button" onClick={applyMinorRoomRecommendation} disabled={!minorRoomRecommendation.items.some((item) => item.room)}>
-              自动填入推荐
+            <button type="button" onClick={applyMinorRoomRecommendation} disabled={!minorRoomRecommendation.items.some((item) => item.rooms.length)}>
+              按建议锁定考场
             </button>
           </div>
           {minorRoomRecommendation.items.length > 0 && (
             <div className="minor-recommend-list">
               {minorRoomRecommendation.items.map((item) => (
                 <span key={item.language}>
-                  {item.language} {item.count} 人：{item.room ? `${item.room.roomNo}考场 · ${item.room.doorNo || "无门牌"} · ${item.room.roomName || "无教室名"}` : "暂无可推荐考场"}
+                  {item.language} {item.count} 人：{item.rooms.length ? item.rooms.map((room) => `${room.roomNo}考场`).join("、") : "暂无可推荐考场"}
                 </span>
               ))}
             </div>
           )}
           {minorLanguages.length === 0 ? (
-            <div className="empty">当前成绩单未发现日语、俄语、西班牙语、法语、德语学生。</div>
+            <div className="empty">当前成绩单只有英语或尚未导入外语语种；英语会自动从第 1 考场开始排。</div>
           ) : (
             <div className="language-grid">
               {minorLanguages.map((language) => (
                 <div className="language-row" key={language}>
                   <strong>{language}</strong>
-                  <MinorRoomInput placeholder="考场号" value={minorRooms[language]?.roomNo || ""} onCommit={(value) => commitMinorRoom(language, "roomNo", value)} />
-                  <MinorRoomInput placeholder="门牌号" value={minorRooms[language]?.doorNo || ""} onCommit={(value) => commitMinorRoom(language, "doorNo", value)} />
-                  <MinorRoomInput placeholder="教室/教师" value={minorRooms[language]?.roomName || ""} onCommit={(value) => commitMinorRoom(language, "roomName", value)} />
+                  <MinorRoomInput placeholder="考场号，可填 23 或 23,24" value={minorRooms[language]?.roomNos || minorRooms[language]?.roomNo || ""} onCommit={(value) => commitMinorRoom(language, "roomNos", value)} />
+                  <span className="language-row-note">留空则自动接在英语后面；填写后按所填考场容量排。</span>
                 </div>
               ))}
             </div>
@@ -742,62 +739,22 @@ function App() {
   const isPreviewStep = activeStepItem.shortTitle === "预览";
 
   return view === "home" ? (
-    <main className="app-shell home-shell">
-      <header className="marketing-nav">
-        <div>
-          <strong>Seeklume ExamSeats</strong>
-        </div>
-        <button type="button" className="nav-link" onClick={() => setShowAbout(true)}><Info size={16} /> 隐私与开源</button>
-      </header>
-      <section className="home-hero">
-        <div className="home-hero-copy fade-up">
-          <span className="status-note"><Sparkles size={13} /> 不登录 · 不上传 · 不做云端同步</span>
-          <h1>ExamSeats 排座工具</h1>
-          <p className="home-sub">从成绩单到可打印考务材料，一次完成。导入物理类、历史类成绩单，自动排座、校验冲突、生成班主任表、考场信息表和门牌人数表。全程本机处理，学生数据只留在当前浏览器。</p>
-          <div className="home-actions">
-            <button type="button" className="primary" onClick={newBlankExam}><FilePlus2 size={16} /> 开始排座</button>
-          </div>
-        </div>
-      </section>
-      {records.length > 0 && (
-        <section className="local-records-panel" aria-label="本机历史记录">
-          <div className="records-heading">
-            <div>
-              <h2>本机历史记录</h2>
-              <p>只读取当前浏览器的本地记录。换设备、换浏览器或清理缓存后，这里可能看不到旧考试。</p>
-            </div>
-            <div className="record-toolbar">
-              <label className="record-search">
-                <Search size={15} />
-                <input value={recordFilter} placeholder="搜索考试名称/日期/版本" onChange={(event) => setRecordFilter(event.target.value)} />
-              </label>
-              <button type="button" onClick={clearLocalData}><Trash2 size={16} /> 清空本机数据</button>
-            </div>
-          </div>
-          {filteredRecords.length ? (
-            <div className="record-list">
-              {filteredRecords.slice(0, 8).map((record) => (
-                <article className="record-card" key={record.id}>
-                  <div>
-                    <strong>{record.examName || "未命名考试"}</strong>
-                    <span>{record.examDate || "未设置日期"} · 第 {record.version || 1} 版 · {formatRecordTime(record.createdAt)}</span>
-                  </div>
-                  <div className="record-actions">
-                    <button type="button" onClick={() => openRecord(record)}>打开</button>
-                    <button type="button" onClick={() => exportRecord(record)}><Download size={16} /> 导出</button>
-                    <button type="button" onClick={() => removeRecord(record.id)}><Trash2 size={16} /> 删除</button>
-                  </div>
-                </article>
-              ))}
-            </div>
-          ) : (
-            <div className="empty local-empty">没有匹配的本机历史记录。</div>
-          )}
-        </section>
-      )}
-      <footer className="brand-footer">© Seeklume ExamSeats · 本机排座工具 · 数据不出浏览器</footer>
+    <>
+      <HomeLanding
+        records={records}
+        filteredRecords={filteredRecords}
+        recordFilter={recordFilter}
+        setRecordFilter={setRecordFilter}
+        clearLocalData={clearLocalData}
+        formatRecordTime={formatRecordTime}
+        openRecord={openRecord}
+        exportRecord={exportRecord}
+        removeRecord={removeRecord}
+        onStart={newBlankExam}
+        onOpenAbout={() => setShowAbout(true)}
+      />
       {showAbout && <AboutModal onClose={() => setShowAbout(false)} />}
-    </main>
+    </>
   ) : (
     <main className="app-shell">
       <header className="topbar">
@@ -870,7 +827,7 @@ function App() {
             <div className="preview-sidebar-summary">
               <StatCard emoji="👥" icon={<UsersRound size={21} />} label="学生" value={`${totalStudents}`} hint="物理 + 历史" popup={<StudentStatPopup physics={physics.students.length} history={history.students.length} total={totalStudents} />} />
               <StatCard emoji="🏫" icon={<School size={21} />} label="考场" value={`${enabledRooms}`} hint={`配置 ${rooms.length}`} popup={<RoomStatPopup stats={roomStats} />} />
-              <StatCard emoji="💬" icon={<Globe2 size={21} />} label="语种" value={foreignLanguages.length ? `${foreignLanguages.length}种` : "无"} hint={minorLanguages.length ? `小语种 ${configuredMinorRooms}/${minorLanguages.length}` : "仅英语"} popup={<LanguageStatPopup stats={languageStats} />} />
+              <StatCard emoji="💬" icon={<Globe2 size={21} />} label="语种" value={foreignLanguages.length ? `${foreignLanguages.length}种` : "无"} hint={minorLanguages.length ? `非英语 ${configuredMinorRooms}/${minorLanguages.length}` : "仅英语"} popup={<LanguageStatPopup stats={languageStats} />} />
               <StatCard emoji={visibleErrors.length ? "⚠️" : "✅"} icon={visibleErrors.length ? <AlertTriangle size={21} /> : <CheckCircle2 size={21} />} label="校验" value={visibleErrors.length ? `${visibleErrors.length}` : hasStarted ? "通过" : "待开始"} hint={visibleErrors.length ? "待处理" : hasStarted ? "可生成" : "未导入"} tone={visibleErrors.length ? "danger" : "success"} popup={<ValidationStatPopup issues={routedIssues} summary={validationSummary} hasStarted={hasStarted} onIssueClick={goIssue} />} />
             </div>
           </aside>
@@ -919,37 +876,6 @@ function App() {
       </nav>
       {showAbout && <AboutModal onClose={() => setShowAbout(false)} />}
     </main>
-  );
-}
-
-function AboutModal({ onClose }) {
-  return (
-    <div className="fullscreen-overlay about-overlay" role="dialog" aria-modal="true" aria-label="隐私与开源说明">
-      <section className="about-card">
-        <div className="about-head">
-          <div>
-            <span>Seeklume ExamSeats</span>
-            <h2>隐私与开源</h2>
-          </div>
-          <button type="button" onClick={onClose}>关闭</button>
-        </div>
-        <div className="about-grid">
-          <article>
-            <strong>数据留在本机</strong>
-            <p>本工具不登录、不上传、不做云端同步。学生名单、考场配置、考试时间和本机历史只保存在当前浏览器。</p>
-          </article>
-          <article>
-            <strong>历史记录边界</strong>
-            <p>更换电脑、清理浏览器缓存、使用无痕模式或换域名访问，都可能导致历史不可见。长期备份请导出 Excel 自行保存。</p>
-          </article>
-          <article>
-            <strong>开源许可</strong>
-            <p>项目代码按 MIT License 开源发布，可自由使用、复制、修改和分发；请保留许可证与必要署名。</p>
-          </article>
-        </div>
-        <p className="about-note">数据只在本机，导出后由你自己掌握。</p>
-      </section>
-    </div>
   );
 }
 
@@ -1971,8 +1897,8 @@ function buildLanguageStats(students, minorRooms) {
     .map((language) => ({
       language,
       count: counts.get(language) || 0,
-      roomNo: minorRooms[language]?.roomNo || "",
-      roomName: minorRooms[language]?.roomName || "",
+      roomNo: minorRooms[language]?.roomNos || minorRooms[language]?.roomNo || "",
+      roomName: "",
     }));
 }
 
@@ -1989,20 +1915,28 @@ function buildMinorRoomRecommendation({ students, rooms, minorLanguages }) {
     englishRoomCount += 1;
   }
   const englishEndRoom = englishRoomCount ? enabledRooms[englishRoomCount - 1]?.roomNo : "无";
-  const startIndex = Math.min(englishRoomCount, enabledRooms.length);
-  const items = minorLanguages.map((language, index) => {
-    const room = enabledRooms[startIndex + index];
+  let cursor = Math.min(englishRoomCount, enabledRooms.length);
+  const items = minorLanguages.map((language) => {
+    const count = students.filter((student) => student.language === language).length;
+    const roomsForLanguage = [];
+    let remainingLanguage = count;
+    while (cursor < enabledRooms.length && remainingLanguage > 0) {
+      const room = enabledRooms[cursor];
+      roomsForLanguage.push(room);
+      remainingLanguage -= Number(room.capacity) || 40;
+      cursor += 1;
+    }
     return {
       language,
-      room,
-      count: students.filter((student) => student.language === language).length,
+      rooms: remainingLanguage > 0 ? [] : roomsForLanguage,
+      count,
     };
   });
   const summary = !students.length
     ? "导入成绩单后自动计算英语占用范围。"
     : remaining > 0
-      ? `英语 ${englishCount} 人，当前普通考场不足，暂不能推荐小语种考场。`
-      : `英语 ${englishCount} 人，预计使用 1-${englishEndRoom} 考场；小语种建议从下一考场开始。`;
+      ? `英语 ${englishCount} 人，当前普通考场不足，暂不能推荐后续语种考场。`
+      : `英语 ${englishCount} 人，预计使用 1-${englishEndRoom} 考场；其他语种从后续考场连续安排。`;
   return { englishCount, englishRoomCount, englishEndRoom, items, summary };
 }
 
@@ -2044,16 +1978,16 @@ function RoomFixPanel({ errors, duplicateDoorNos, conflictDoorNos, onGoMinor }) 
   return (
     <div className="error-box room-fix-panel">
       <strong>考场信息需要修正</strong>
-      <p>这通常不是你手填错了，而是导入的门牌模板或小语种考场和当前排考规则发生了冲突。</p>
+      <p>这通常不是你手填错了，而是导入的门牌模板、外语安排和当前排考规则发生了冲突。</p>
       {hasDuplicateDoors && <p>普通考场里重复的门牌号：{[...duplicateDoorNos].join("、")}。下方对应行已高亮，直接改门牌号即可。</p>}
-      {hasConflictDoors && <p>本次报错涉及门牌：{[...conflictDoorNos].join("、")}。如果是小语种占用了同一时段教室，请去“小语种”页调整。</p>}
+      {hasConflictDoors && <p>本次报错涉及门牌：{[...conflictDoorNos].join("、")}。如果是外语语种占用了同一时段教室，请去“外语安排”页调整。</p>}
       {errors.length > 0 && (
         <ul>
           {errors.slice(0, 4).map((error) => <li key={error}>{error}</li>)}
         </ul>
       )}
       <div className="actions">
-        <button type="button" onClick={onGoMinor}>去改小语种考场</button>
+        <button type="button" onClick={onGoMinor}>去改外语安排</button>
       </div>
     </div>
   );
@@ -2062,7 +1996,7 @@ function RoomFixPanel({ errors, duplicateDoorNos, conflictDoorNos, onGoMinor }) 
 function dockTipLabel(title) {
   if (title === "导入成绩单") return "导入成绩单";
   if (title === "确认考场") return "管理考场";
-  if (title === "小语种") return "设置小语种";
+  if (title === "外语安排" || title === "小语种") return "设置外语语种考场";
   if (title === "考试时间") return "填写时间";
   if (title === "全面预览") return "查看预览";
   if (title === "导出") return "导出材料";
@@ -2393,7 +2327,7 @@ function getPreviewSheetMeta(label, columnCount, rowCount) {
   if (String(label || "").includes("外语")) {
     return {
       title: "外语安排",
-      note: "英语和各小语种分开看；当前页的方向只作用于这一种语种。",
+      note: "英语和其他语种分开看；当前页的方向只作用于这一种语种。",
     };
   }
   if (String(label || "").includes("考场信息")) {
@@ -2638,7 +2572,7 @@ function buildPreviewTabs(schedule, rooms, scheduleMode, validationReport = []) 
   const tabs = [
     { key: "validation", label: "校验报告", rows: validationReport },
     { key: "times", label: "考试时间", rows: buildTimeRowsForPreview(schedule.examTimes || []) },
-    { key: "doors", label: "门牌人数总览", rows: buildDoorRowsForPreview(schedule, rooms) },
+    { key: "doors", label: "门牌人数总览", rows: buildDoorRows(schedule, rooms) },
     { key: "admin", label: "管理总表", rows: buildAdminRows(schedule.allRows) },
     { key: "classes", label: "班主任表", rows: classRows },
     { key: "roomDetails", label: "考场信息表", rows: buildRoomPreviewRows(schedule) },
@@ -2664,33 +2598,6 @@ function buildTimeRowsForPreview(examTimes = []) {
       日期: item.date,
       时间: [item.start, item.end].filter(Boolean).join("-"),
     }));
-}
-
-function buildDoorRowsForPreview(schedule, rooms) {
-  return rooms.map((room) => {
-    const main = schedule.mainAssignments.filter((item) => item.roomNo === room.roomNo);
-    const foreign = schedule.foreignAssignments.filter((item) => item.roomNo === room.roomNo);
-    const elective = schedule.electiveAssignments.filter((item) => item.roomNo === room.roomNo);
-    const subjectRows = (subject) => schedule.subjectAssignments.filter((item) => item.roomNo === room.roomNo && item.subjectLabel === subject);
-    const isSelfStudySubjectRoom = (subject) => subjectRows(subject).some((item) => item.status === "自习");
-    return {
-      门牌号: room.doorNo,
-      教室: room.roomName,
-      考场号: room.roomNo,
-      语数物历: main.length || "",
-      外语: foreign.length || "",
-      化学: subjectRows("化学").length || "",
-      地理: subjectRows("地理").length || "",
-      政治: subjectRows("政治").length || "",
-      生物: subjectRows("生物").length || "",
-      四选二: describePreviewAssignments(elective),
-      人数: room.capacity,
-      "__selfStudy:化学": isSelfStudySubjectRoom("化学"),
-      "__selfStudy:地理": isSelfStudySubjectRoom("地理"),
-      "__selfStudy:政治": isSelfStudySubjectRoom("政治"),
-      "__selfStudy:生物": isSelfStudySubjectRoom("生物"),
-    };
-  }).filter((row) => row.语数物历 || row.外语 || row.化学 || row.地理 || row.政治 || row.生物 || row.四选二);
 }
 
 function describePreviewAssignments(assignments = []) {
@@ -2861,10 +2768,10 @@ function createIssueRoute(message) {
   }
   const language = LANGUAGE_SUBJECTS.find((item) => text.includes(item));
   if (language && text.includes("未指定外语考试考场")) {
-    return issueRoute(2, "小语种", "💬", text, `设置${language}考场`, `${language}学生需要单独填写考场号、门牌号和教室`);
+    return issueRoute(2, "外语安排", "💬", text, `设置${language}考场`, `${language}学生需要指定或自动匹配外语考场`);
   }
   if (text.includes("小语种") || text.includes("日语") || text.includes("俄语") || text.includes("西班牙语") || text.includes("法语") || text.includes("德语") || text.includes("未指定") || text.includes("外语时段")) {
-    return issueRoute(2, "小语种", "💬", text, "设置小语种考场", text || "这里要补考场号、门牌号、教室");
+    return issueRoute(2, "外语安排", "💬", text, "设置外语语种考场", text || "这里调整各语种使用的考场号");
   }
   if (text.includes("缺少普通考场清单")) {
     return issueRoute(1, "考场", "🏫", text, "先导入考场模板或生成默认考场", "当前没有启用的普通考场，所以还不能计算容量和座位");
@@ -2922,7 +2829,7 @@ function getStatusLabel(status) {
 
 function suggestAction(message) {
   if (message.includes("容量不足") || (message.includes("缺") && message.includes("座位"))) return "在“确认考场”里新增考场或调整容量";
-  if (message.includes("小语种") || message.includes("未指定")) return "在“小语种”步骤里填写考场号、门牌号和教室";
+  if (message.includes("小语种") || message.includes("未指定")) return "在“外语安排”步骤里填写或调整语种考场";
   if (message.includes("再选科") || message.includes("选了")) return "在“导入成绩单”的名单表里修正选科组合或单科成绩";
   if (message.includes("重复考号")) return "在名单表中搜索该考号，删除或修正重复学生";
   if (message.includes("缺少")) return "检查导入表头，或在名单表中补齐学生信息";

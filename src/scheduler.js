@@ -330,16 +330,12 @@ function validateBeforeSchedule({ physicsStudents, historyStudents, enabledRooms
       }
     }
   }
-  const languages = new Set([...physicsStudents, ...historyStudents].map((s) => s.language).filter((lang) => lang && lang !== "英语"));
-  for (const language of languages) {
-    if (!minorLanguageRooms[language]?.roomNo) errors.push(`${language} 未指定外语考试考场`);
-  }
   if (!enabledRooms.length) {
     return [...new Set(errors)];
   }
-  const englishStudents = [...physicsStudents, ...historyStudents].filter((student) => student.language === "英语");
-  const englishNeeded = countNeededRooms(englishStudents, enabledRooms, 0);
-  if (englishNeeded > enabledRooms.length) errors.push(`英语普通考场容量不足：需要 ${englishNeeded} 个考场，当前 ${enabledRooms.length} 个`);
+  const foreignNeeded = countForeignNeededRooms([...physicsStudents, ...historyStudents], enabledRooms, minorLanguageRooms);
+  if (!Number.isFinite(foreignNeeded)) errors.push(`外语普通考场容量不足：请新增考场或调整外语考场容量`);
+  if (foreignNeeded > enabledRooms.length) errors.push(`外语普通考场容量不足：需要 ${foreignNeeded} 个考场，当前 ${enabledRooms.length} 个`);
   const physicsRooms = countNeededRooms(physicsStudents, enabledRooms, 0);
   const totalMainRooms = physicsRooms + countNeededRooms(historyStudents, enabledRooms, physicsRooms);
   if (totalMainRooms > enabledRooms.length) errors.push(`普通考场容量不足：需要 ${totalMainRooms} 个考场，当前 ${enabledRooms.length} 个`);
@@ -375,6 +371,56 @@ function countNeededRooms(students, rooms, startIndex) {
 
 function capacityFrom(rooms, startIndex) {
   return rooms.slice(startIndex).reduce((sum, room) => sum + room.capacity, 0);
+}
+
+function countForeignNeededRooms(students, rooms, foreignRoomPlan = {}) {
+  const languageGroups = groupForeignStudentsByLanguage(students);
+  const occupied = new Set();
+  let cursor = 0;
+  let usedCount = 0;
+  for (const { language, students: languageStudents } of languageGroups) {
+    const preferredIndexes = getPlannedRoomIndexes(foreignRoomPlan[language], rooms);
+    const indexes = preferredIndexes.length ? preferredIndexes : allocateRoomIndexes(languageStudents.length, rooms, cursor, occupied);
+    if (!indexes.length || capacityOfIndexes(rooms, indexes) < languageStudents.length) return Number.POSITIVE_INFINITY;
+    indexes.forEach((index) => occupied.add(index));
+    usedCount = Math.max(usedCount, ...indexes.map((index) => index + 1));
+    cursor = Math.max(cursor, Math.max(...indexes) + 1);
+  }
+  return usedCount;
+}
+
+function groupForeignStudentsByLanguage(students) {
+  return ["英语", ...LANGUAGE_SUBJECTS]
+    .map((language) => ({
+      language,
+      students: students.filter((student) => (student.language || "英语") === language),
+    }))
+    .filter((group) => group.students.length);
+}
+
+function getPlannedRoomIndexes(plan = {}, rooms = []) {
+  const roomNos = safeString(plan.roomNos || plan.roomNo)
+    .split(/[,，、/ ]+/)
+    .map((value) => value.trim())
+    .filter(Boolean);
+  return roomNos
+    .map((roomNo) => rooms.findIndex((room) => safeString(room.roomNo) === roomNo))
+    .filter((index) => index >= 0);
+}
+
+function allocateRoomIndexes(studentCount, rooms, startIndex, occupied = new Set()) {
+  const indexes = [];
+  let remaining = studentCount;
+  for (let index = startIndex; index < rooms.length && remaining > 0; index += 1) {
+    if (occupied.has(index)) continue;
+    indexes.push(index);
+    remaining -= Number(rooms[index].capacity) || 40;
+  }
+  return remaining > 0 ? [] : indexes;
+}
+
+function capacityOfIndexes(rooms, indexes) {
+  return indexes.reduce((sum, index) => sum + (Number(rooms[index]?.capacity) || 40), 0);
 }
 
 function studentSort(a, b) {
@@ -429,52 +475,33 @@ function makeAssignment(student, room, seatNo, plan, subjectLabel) {
 
 function assignForeign(mainAssignments, rooms, minorLanguageRooms) {
   const assignments = [];
-  const minors = new Map();
-  const english = [];
+  const languageGroups = groupForeignStudentsByLanguage(mainAssignments);
+  const occupied = new Set();
+  let cursor = 0;
 
-  for (const main of mainAssignments) {
-    if (main.language === "英语") {
-      english.push(main);
-    } else {
-      if (!minors.has(main.language)) minors.set(main.language, []);
-      minors.get(main.language).push(main);
+  for (const { language, students } of languageGroups) {
+    const sorted = [...students].sort((a, b) => b.languageScore - a.languageScore || a.studentId.localeCompare(b.studentId, "zh-Hans-CN", { numeric: true }));
+    const preferredIndexes = getPlannedRoomIndexes(minorLanguageRooms[language], rooms);
+    const roomIndexes = preferredIndexes.length ? preferredIndexes : allocateRoomIndexes(sorted.length, rooms, cursor, occupied);
+    let studentIndex = 0;
+    for (const roomIndex of roomIndexes) {
+      const room = rooms[roomIndex];
+      const capacity = Number(room.capacity) || 40;
+      for (let seat = 1; seat <= capacity && studentIndex < sorted.length; seat += 1) {
+        assignments.push({
+          ...sorted[studentIndex],
+          plan: "外语",
+          subjectLabel: language,
+          roomNo: room.roomNo,
+          doorNo: room.doorNo,
+          roomName: room.roomName,
+          seatNo: seat,
+        });
+        studentIndex += 1;
+      }
+      occupied.add(roomIndex);
     }
-  }
-
-  let roomIndex = 0;
-  let seat = 1;
-  for (const student of english) {
-    const room = rooms[roomIndex];
-    assignments.push({
-      ...student,
-      plan: "外语",
-      subjectLabel: "英语",
-      roomNo: room.roomNo,
-      doorNo: room.doorNo,
-      roomName: room.roomName,
-      seatNo: seat,
-    });
-    seat += 1;
-    if (seat > room.capacity) {
-      roomIndex += 1;
-      seat = 1;
-    }
-  }
-
-  for (const [language, languageStudents] of minors.entries()) {
-    const target = minorLanguageRooms[language];
-    const sorted = [...languageStudents].sort((a, b) => b.languageScore - a.languageScore || a.studentId.localeCompare(b.studentId, "zh-Hans-CN", { numeric: true }));
-    sorted.forEach((student, index) => {
-      assignments.push({
-        ...student,
-        plan: "外语",
-        subjectLabel: language,
-        roomNo: target.roomNo,
-        doorNo: target.doorNo || "",
-        roomName: target.roomName || target.roomNo,
-        seatNo: index + 1,
-      });
-    });
+    if (roomIndexes.length) cursor = Math.max(cursor, Math.max(...roomIndexes) + 1);
   }
 
   return assignments;
@@ -833,10 +860,6 @@ function buildValidationWarnings(schedule, rooms) {
   for (const [className, count] of countByValue(schedule.allRows, "班级").entries()) {
     if (count > 45) warnings.push(validationRow(VALIDATION_LEVELS.WARNING, "班主任表", "需复核", `${className} 共 ${count} 人，单班打印可能超过一页`, "导出后检查该班 sheet 分页"));
   }
-  const minorCounts = countMinorLanguages(schedule.foreignAssignments);
-  for (const [language, count] of minorCounts.entries()) {
-    if (count > 40) warnings.push(validationRow(VALIDATION_LEVELS.WARNING, "小语种容量", "规则允许", `${language} ${count} 人，小语种考场不做容量拦截`, "如需分教室，请手动调整小语种考场"));
-  }
   warnings.push(validationRow(VALIDATION_LEVELS.WARNING, "敏感列", "已隔离", "管理总表含总分/排名；教师打印表不含总分、排名、单科分数", "对外发送时使用年级打印表、班主任表、科目表或考场信息表"));
   return warnings;
 }
@@ -845,7 +868,7 @@ function buildValidationReviews(schedule, rooms) {
   const rows = [];
   rows.push(validationRow(VALIDATION_LEVELS.REVIEW, "学生人数", "复核", `总人数 ${schedule.allRows.length}，物理 ${schedule.mainAssignments.filter((item) => item.firstSubject === "物理").length}，历史 ${schedule.mainAssignments.filter((item) => item.firstSubject === "历史").length}`, "核对是否等于本次考试报名人数"));
   rows.push(...summarizePlan("语数物/历", schedule.mainAssignments).map((detail) => validationRow(VALIDATION_LEVELS.REVIEW, "语数物/历人数", "复核", detail, "核对语文、数学、物理/历史人数")));
-  rows.push(...summarizePlan("外语", schedule.foreignAssignments).map((detail) => validationRow(VALIDATION_LEVELS.REVIEW, "外语人数", "复核", detail, "核对英语和小语种人数")));
+  rows.push(...summarizePlan("外语", schedule.foreignAssignments).map((detail) => validationRow(VALIDATION_LEVELS.REVIEW, "外语人数", "复核", detail, "核对英语和其他语种人数")));
   if (schedule.mode === SCHEDULE_MODES.THREE_DAY_SPLIT) {
     for (const subject of ELECTIVE_SUBJECTS) {
       const subjectRows = schedule.subjectAssignments.filter((item) => item.subjectLabel === subject);
@@ -858,7 +881,7 @@ function buildValidationReviews(schedule, rooms) {
     rows.push(validationRow(VALIDATION_LEVELS.REVIEW, "语数物/历空座", "复核", `第${item.roomNo}考场 ${item.count}/${item.capacity} 人，空余 ${Math.max(0, item.capacity - item.count)}`, "核对语数物/历考场人数"));
   }
   for (const [language, assignments] of groupBy(schedule.foreignAssignments.filter((item) => item.subjectLabel !== "英语"), "subjectLabel").entries()) {
-    rows.push(validationRow(VALIDATION_LEVELS.REVIEW, "小语种座位", "复核", `${language} ${assignments.length} 人，考场 ${roomRange(assignments)}，座位 1-${assignments.length}`, "核对小语种门牌和座位范围"));
+    rows.push(validationRow(VALIDATION_LEVELS.REVIEW, "外语语种座位", "复核", `${language} ${assignments.length} 人，考场 ${roomRange(assignments)}，座位 1-${assignments.length}`, "核对该语种门牌和座位范围"));
   }
   return rows;
 }
@@ -868,12 +891,12 @@ function validationRow(level, item, result, detail, action) {
 }
 
 function suggestValidationAction(message) {
-  if (message.includes("同时用于")) return "调整同一时段冲突的考场号/门牌号/小语种考场";
+  if (message.includes("同时用于")) return "调整同一时段冲突的考场号/门牌号/外语语种考场";
   if (message.includes("座重复")) return "重新生成或检查该考场座位号";
   if (message.includes("超容量") || message.includes("容量不足")) return "新增考场或调整容量";
   if (message.includes("漏排") || message.includes("重复排")) return "检查学生名单和排考规则";
   if (message.includes("混入") || message.includes("混场")) return "检查首选科目、再选科和考场边界";
-  if (message.includes("小语种") || message.includes("未指定")) return "设置小语种考场";
+  if (message.includes("小语种") || message.includes("未指定")) return "设置外语语种考场";
   if (message.includes("缺少") || message.includes("缺")) return "补齐导入字段或学生信息";
   return "按提示修正后重新生成";
 }
@@ -1340,18 +1363,18 @@ function displayPlanName(plan) {
 export function buildRoomSummaryRows(schedule, rooms) {
   const rows = [];
   const subjectLabels = ELECTIVE_SUBJECTS;
-  for (const room of rooms) {
-    const main = schedule.mainAssignments.filter((item) => item.roomNo === room.roomNo);
-    const foreign = schedule.foreignAssignments.filter((item) => item.roomNo === room.roomNo);
-    const elective = schedule.electiveAssignments.filter((item) => item.roomNo === room.roomNo);
-    const subjectRows = subjectLabels.flatMap((subject) => schedule.subjectAssignments.filter((item) => item.roomNo === room.roomNo && item.subjectLabel === subject));
+  for (const room of buildDoorSummaryRooms(schedule, rooms)) {
+    const main = findAssignmentsInRoom(schedule.mainAssignments, room);
+    const foreign = findAssignmentsInRoom(schedule.foreignAssignments, room);
+    const elective = findAssignmentsInRoom(schedule.electiveAssignments, room);
+    const subjectRows = subjectLabels.flatMap((subject) => findAssignmentsInRoom(schedule.subjectAssignments, room).filter((item) => item.subjectLabel === subject));
     if (!main.length && !foreign.length && !elective.length) continue;
     rows.push({
       考场号: room.roomNo,
       门牌号: room.doorNo,
       教室: room.roomName,
       主考人数: main.length,
-      外语人数: foreign.length,
+      外语人数: describeForeignAssignments(foreign),
       四选二内容: describeAssignments(elective),
       三天内容: describeSubjectAssignments(subjectRows),
       备注: "",
@@ -1360,19 +1383,19 @@ export function buildRoomSummaryRows(schedule, rooms) {
   return rows;
 }
 
-function buildDoorRows(schedule, rooms) {
-  return rooms.map((room) => {
-    const main = schedule.mainAssignments.filter((item) => item.roomNo === room.roomNo);
-    const foreign = schedule.foreignAssignments.filter((item) => item.roomNo === room.roomNo);
-    const elective = schedule.electiveAssignments.filter((item) => item.roomNo === room.roomNo);
-    const subjectRows = (subject) => schedule.subjectAssignments.filter((item) => item.roomNo === room.roomNo && item.subjectLabel === subject);
+export function buildDoorRows(schedule, rooms) {
+  return buildDoorSummaryRooms(schedule, rooms).map((room) => {
+    const main = findAssignmentsInRoom(schedule.mainAssignments, room);
+    const foreign = findAssignmentsInRoom(schedule.foreignAssignments, room);
+    const elective = findAssignmentsInRoom(schedule.electiveAssignments, room);
+    const subjectRows = (subject) => findAssignmentsInRoom(schedule.subjectAssignments, room).filter((item) => item.subjectLabel === subject);
     const isSelfStudySubjectRoom = (subject) => subjectRows(subject).some((item) => item.status === "自习");
     return {
       门牌号: room.doorNo,
       教室: room.roomName,
       考场号: room.roomNo,
       语数物历: main.length || "",
-      外语: foreign.length || "",
+      外语: describeForeignAssignments(foreign),
       化学: subjectRows("化学").length || "",
       地理: subjectRows("地理").length || "",
       政治: subjectRows("政治").length || "",
@@ -1385,7 +1408,46 @@ function buildDoorRows(schedule, rooms) {
       "__selfStudy:政治": isSelfStudySubjectRoom("政治"),
       "__selfStudy:生物": isSelfStudySubjectRoom("生物"),
     };
-  });
+  }).filter((row) => row.语数物历 || row.外语 || row.化学 || row.地理 || row.政治 || row.生物 || row.四选二);
+}
+
+function buildDoorSummaryRooms(schedule, rooms) {
+  const rows = new Map();
+  for (const room of rooms || []) {
+    rows.set(roomKey(room), { ...room });
+  }
+  for (const item of [
+    ...(schedule.mainAssignments || []),
+    ...(schedule.foreignAssignments || []),
+    ...(schedule.electiveAssignments || []),
+    ...(schedule.subjectAssignments || []),
+  ]) {
+    const key = roomKey(item);
+    if (!key || rows.has(key)) continue;
+    rows.set(key, {
+      roomNo: item.roomNo,
+      doorNo: item.doorNo || "",
+      roomName: item.roomName || "",
+      capacity: "",
+      enabled: true,
+    });
+  }
+  return [...rows.values()].sort(compareRoomNo);
+}
+
+function findAssignmentsInRoom(assignments = [], room) {
+  return assignments.filter((item) => roomKey(item) === roomKey(room));
+}
+
+function roomKey(value = {}) {
+  const doorNo = safeString(value.doorNo);
+  if (doorNo) return `door:${doorNo}`;
+  const roomNo = safeString(value.roomNo);
+  return roomNo ? `room:${roomNo}` : "";
+}
+
+function describeForeignAssignments(assignments = []) {
+  return describeAssignments(assignments);
 }
 
 function buildTimeSheetRows(examTimes = []) {
