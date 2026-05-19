@@ -83,6 +83,10 @@ const LOCAL_STORAGE_KEYS = [
   "exam-workspace-draft",
 ];
 
+function shouldOpenHomeGuide() {
+  return new URLSearchParams(window.location.search).get("view") === "home";
+}
+
 function App() {
   const workspaceDraft = loadWorkspaceDraft();
   const [examName, setExamName] = useState(workspaceDraft?.examName || "高三大型考试");
@@ -109,7 +113,7 @@ function App() {
   const [previewKey, setPreviewKey] = useState(workspaceDraft?.previewKey || "print");
   const [activeStep, setActiveStep] = useState(workspaceDraft?.activeStep ?? 0);
   const [studentQuery, setStudentQuery] = useState("");
-  const [view, setView] = useState(workspaceDraft ? "workspace" : "home");
+  const [view, setView] = useState(shouldOpenHomeGuide() ? "home" : workspaceDraft ? "workspace" : "home");
   const [recordFilter, setRecordFilter] = useState("");
   const [showAbout, setShowAbout] = useState(false);
 
@@ -759,7 +763,9 @@ function App() {
     <main className="app-shell">
       <header className="topbar">
         <div className="topbar-brand">
-          <span className="brand-logo">Seeklume ExamSeats</span>
+          <a href="https://home.seeklume.work/" style={{ color: "inherit", textDecoration: "none" }}>
+            <span className="brand-logo">Seeklume ExamSeats</span>
+          </a>
         </div>
         <div className={`dynamic-island ${visibleErrors.length ? "warning" : "ready"}`} role="status">
           <span className="island-emoji" aria-hidden="true">{visibleErrors.length ? "⚠️" : activeStepItem.emoji}</span>
