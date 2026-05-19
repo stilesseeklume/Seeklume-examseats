@@ -585,7 +585,7 @@ function App() {
       note: "英语先排，其他语种接着排；语种之间不混考场。",
       content: (
         <>
-          <p className="muted">外语按语种分组排座：英语先用普通考场，日语、俄语等接着用后续考场。每个考场默认容量 40，可在“确认考场”里改；语种之间不会混在同一考场。</p>
+          <p className="muted">外语按语种分组排座：英语先用普通考场，日语、俄语等接着用后续考场。手动填写后会锁定该语种考场，不会自动改到别处；容量不够会提示补考场。</p>
           <div className="minor-recommend-card">
             <div>
               <strong>外语考场建议</strong>
@@ -611,8 +611,8 @@ function App() {
               {minorLanguages.map((language) => (
                 <div className="language-row" key={language}>
                   <strong>{language}</strong>
-                  <MinorRoomInput placeholder="考场号，可填 23 或 23,24" value={minorRooms[language]?.roomNos || minorRooms[language]?.roomNo || ""} onCommit={(value) => commitMinorRoom(language, "roomNos", value)} />
-                  <span className="language-row-note">留空则自动接在英语后面；填写后按所填考场容量排。</span>
+                  <MinorRoomInput placeholder="考场号/门牌，可填 23 或 23,24" value={minorRooms[language]?.roomNos || minorRooms[language]?.roomNo || ""} onCommit={(value) => commitMinorRoom(language, "roomNos", value)} />
+                  <span className="language-row-note">留空自动续排；填写后严格锁定，容量不够会报错。</span>
                 </div>
               ))}
             </div>

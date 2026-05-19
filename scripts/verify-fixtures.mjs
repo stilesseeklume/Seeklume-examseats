@@ -66,8 +66,37 @@ const splitSchedule = buildSchedule({
   mode: SCHEDULE_MODES.THREE_DAY_SPLIT,
 });
 
+const manualJapaneseSchedule = buildSchedule({
+  physicsStudents: physics.students,
+  historyStudents: history.students,
+  rooms,
+  minorLanguageRooms: { 日语: { roomNos: "6" } },
+  examTimes: [],
+  mode: SCHEDULE_MODES.THREE_DAY_SPLIT,
+});
+
+const manualJapaneseDoorSchedule = buildSchedule({
+  physicsStudents: physics.students,
+  historyStudents: history.students,
+  rooms,
+  minorLanguageRooms: { 日语: { roomNos: "206" } },
+  examTimes: [],
+  mode: SCHEDULE_MODES.THREE_DAY_SPLIT,
+});
+
+const insufficientJapaneseSchedule = buildSchedule({
+  physicsStudents: physics.students,
+  historyStudents: history.students,
+  rooms: rooms.map((room) => (room.roomNo === "1" ? { ...room, capacity: 1 } : room)),
+  minorLanguageRooms: { 日语: { roomNos: "1" } },
+  examTimes: [],
+  mode: SCHEDULE_MODES.THREE_DAY_SPLIT,
+});
+
 assertEqual(comboSchedule.errors.length, 0, `两天组合生成错误：${comboSchedule.errors.join(";")}`);
 assertEqual(splitSchedule.errors.length, 0, `三天拆分生成错误：${splitSchedule.errors.join(";")}`);
+assertEqual(manualJapaneseSchedule.errors.length, 0, `手动日语考场生成错误：${manualJapaneseSchedule.errors.join(";")}`);
+assertEqual(manualJapaneseDoorSchedule.errors.length, 0, `手动日语门牌生成错误：${manualJapaneseDoorSchedule.errors.join(";")}`);
 assertNoMixedPhysicsHistory(comboSchedule.mainAssignments);
 assertTwoDayComboSummary(comboSchedule);
 
@@ -79,6 +108,9 @@ for (const subject of ELECTIVE_SUBJECTS) {
 
 assertTwoExamTwoSelf(splitSchedule.subjectAssignments, [...physics.students, ...history.students]);
 assertForeignLanguagesDoNotMixRooms(splitSchedule.foreignAssignments);
+assertLanguageUsesOnlyRooms(manualJapaneseSchedule.foreignAssignments, "日语", ["6"]);
+assertLanguageUsesOnlyRooms(manualJapaneseDoorSchedule.foreignAssignments, "日语", ["6"]);
+assertManualForeignRoomBlocksWhenInsufficient(insufficientJapaneseSchedule, "日语");
 assertPrintRowsHideScores(buildPrintRows(splitSchedule.allRows), "班主任表");
 assertPrintRowsHideScores(buildSubjectPrintRows(splitSchedule, "化学"), "科目表");
 assertPrintRowsHideScores(buildRoomPrintRows(splitSchedule), "考场信息表");
@@ -186,6 +218,21 @@ function assertForeignLanguagesDoNotMixRooms(assignments) {
     if (languages.size > 1) {
       throw new Error(`外语第${roomNo}考场混入多个语种：${[...languages].join("、")}`);
     }
+  }
+}
+
+function assertLanguageUsesOnlyRooms(assignments, language, expectedRooms) {
+  const actualRooms = [...new Set(assignments.filter((item) => item.subjectLabel === language).map((item) => String(item.roomNo)))];
+  const expected = expectedRooms.map(String).sort().join(",");
+  const actual = actualRooms.sort().join(",");
+  if (actual !== expected) {
+    throw new Error(`${language}应严格使用手动指定考场 ${expected}，实际 ${actual || "无"}`);
+  }
+}
+
+function assertManualForeignRoomBlocksWhenInsufficient(schedule, language) {
+  if (!schedule.errors.some((message) => message.includes(`${language}外语考场容量不足`))) {
+    throw new Error(`${language}手动指定考场容量不足时应阻断生成，实际错误：${schedule.errors.join(";")}`);
   }
 }
 

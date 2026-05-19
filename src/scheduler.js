@@ -333,9 +333,13 @@ function validateBeforeSchedule({ physicsStudents, historyStudents, enabledRooms
   if (!enabledRooms.length) {
     return [...new Set(errors)];
   }
-  const foreignNeeded = countForeignNeededRooms([...physicsStudents, ...historyStudents], enabledRooms, minorLanguageRooms);
-  if (!Number.isFinite(foreignNeeded)) errors.push(`外语普通考场容量不足：请新增考场或调整外语考场容量`);
-  if (foreignNeeded > enabledRooms.length) errors.push(`外语普通考场容量不足：需要 ${foreignNeeded} 个考场，当前 ${enabledRooms.length} 个`);
+  const foreignPlanErrors = validateForeignRoomPlan([...physicsStudents, ...historyStudents], enabledRooms, minorLanguageRooms);
+  errors.push(...foreignPlanErrors);
+  if (!foreignPlanErrors.length) {
+    const foreignNeeded = countForeignNeededRooms([...physicsStudents, ...historyStudents], enabledRooms, minorLanguageRooms);
+    if (!Number.isFinite(foreignNeeded)) errors.push(`外语普通考场容量不足：请新增考场或调整外语考场容量`);
+    if (foreignNeeded > enabledRooms.length) errors.push(`外语普通考场容量不足：需要 ${foreignNeeded} 个考场，当前 ${enabledRooms.length} 个`);
+  }
   const physicsRooms = countNeededRooms(physicsStudents, enabledRooms, 0);
   const totalMainRooms = physicsRooms + countNeededRooms(historyStudents, enabledRooms, physicsRooms);
   if (totalMainRooms > enabledRooms.length) errors.push(`普通考场容量不足：需要 ${totalMainRooms} 个考场，当前 ${enabledRooms.length} 个`);
@@ -375,12 +379,14 @@ function capacityFrom(rooms, startIndex) {
 
 function countForeignNeededRooms(students, rooms, foreignRoomPlan = {}) {
   const languageGroups = groupForeignStudentsByLanguage(students);
+  const manualIndexesByLanguage = buildManualForeignRoomIndexes(languageGroups, rooms, foreignRoomPlan);
+  const reservedManualIndexes = new Set([...manualIndexesByLanguage.values()].flat());
   const occupied = new Set();
   let cursor = 0;
   let usedCount = 0;
   for (const { language, students: languageStudents } of languageGroups) {
-    const preferredIndexes = getPlannedRoomIndexes(foreignRoomPlan[language], rooms);
-    const indexes = preferredIndexes.length ? preferredIndexes : allocateRoomIndexes(languageStudents.length, rooms, cursor, occupied);
+    const preferredIndexes = manualIndexesByLanguage.get(language) || [];
+    const indexes = preferredIndexes.length ? preferredIndexes : allocateRoomIndexes(languageStudents.length, rooms, cursor, new Set([...occupied, ...reservedManualIndexes]));
     if (!indexes.length || capacityOfIndexes(rooms, indexes) < languageStudents.length) return Number.POSITIVE_INFINITY;
     indexes.forEach((index) => occupied.add(index));
     usedCount = Math.max(usedCount, ...indexes.map((index) => index + 1));
@@ -399,13 +405,91 @@ function groupForeignStudentsByLanguage(students) {
 }
 
 function getPlannedRoomIndexes(plan = {}, rooms = []) {
-  const roomNos = safeString(plan.roomNos || plan.roomNo)
+  return resolveForeignRoomPlan(plan, rooms).indexes;
+}
+
+function resolveForeignRoomPlan(plan = {}, rooms = []) {
+  const tokens = safeString([plan.roomNos, plan.roomNo, plan.doorNo, plan.roomName].filter(Boolean).join(" "))
     .split(/[,，、/ ]+/)
     .map((value) => value.trim())
     .filter(Boolean);
-  return roomNos
-    .map((roomNo) => rooms.findIndex((room) => safeString(room.roomNo) === roomNo))
-    .filter((index) => index >= 0);
+  const indexes = [];
+  const unmatched = [];
+  for (const token of tokens) {
+    const index = findRoomIndexByToken(token, rooms);
+    if (index >= 0) {
+      if (!indexes.includes(index)) indexes.push(index);
+    } else {
+      unmatched.push(token);
+    }
+  }
+  return { indexes, tokens, unmatched };
+}
+
+function findRoomIndexByToken(token, rooms) {
+  const raw = safeString(token);
+  const normalizedToken = normalizeRoomToken(raw);
+  return rooms.findIndex((room) => {
+    const candidates = [
+      room.roomNo,
+      room.doorNo,
+      room.roomName,
+      `${room.roomNo}考场`,
+      `第${room.roomNo}考场`,
+      room.doorNo ? `${room.doorNo}教室` : "",
+    ].map((value) => normalizeRoomToken(value));
+    return candidates.some((candidate) => candidate && candidate === normalizedToken);
+  });
+}
+
+function normalizeRoomToken(value) {
+  return safeString(value)
+    .replace(/^第/, "")
+    .replace(/(考场|教室|门牌|号)$/g, "")
+    .replace(/\s+/g, "")
+    .toLowerCase();
+}
+
+function buildManualForeignRoomIndexes(languageGroups, rooms, foreignRoomPlan = {}) {
+  const result = new Map();
+  for (const { language } of languageGroups) {
+    const resolved = resolveForeignRoomPlan(foreignRoomPlan[language], rooms);
+    if (resolved.tokens.length) result.set(language, resolved.indexes);
+  }
+  return result;
+}
+
+function validateForeignRoomPlan(students, rooms, foreignRoomPlan = {}) {
+  const errors = [];
+  const languageGroups = groupForeignStudentsByLanguage(students);
+  const manualRoomOwners = new Map();
+  for (const { language, students: languageStudents } of languageGroups) {
+    const resolved = resolveForeignRoomPlan(foreignRoomPlan[language], rooms);
+    if (!resolved.tokens.length) continue;
+    if (resolved.unmatched.length) {
+      errors.push(`${language}指定外语考场未找到：${resolved.unmatched.join("、")}。请在“确认考场”里新增或改成已有考场号/门牌号`);
+      continue;
+    }
+    if (!resolved.indexes.length) {
+      errors.push(`${language}指定外语考场为空：请填写已有考场号，或留空让系统自动接在英语后面`);
+      continue;
+    }
+    const capacity = capacityOfIndexes(rooms, resolved.indexes);
+    if (capacity < languageStudents.length) {
+      const roomText = resolved.indexes.map((index) => rooms[index]?.roomNo).filter(Boolean).join("、");
+      errors.push(`${language}外语考场容量不足：指定 ${roomText} 考场容量 ${capacity}，学生 ${languageStudents.length} 人，还缺 ${languageStudents.length - capacity} 座位`);
+    }
+    for (const index of resolved.indexes) {
+      const room = rooms[index];
+      const owner = manualRoomOwners.get(index);
+      if (owner && owner !== language) {
+        errors.push(`外语语种考场冲突：${owner}和${language}都指定了${room?.roomNo || index + 1}考场`);
+      } else {
+        manualRoomOwners.set(index, language);
+      }
+    }
+  }
+  return [...new Set(errors)];
 }
 
 function allocateRoomIndexes(studentCount, rooms, startIndex, occupied = new Set()) {
@@ -476,13 +560,15 @@ function makeAssignment(student, room, seatNo, plan, subjectLabel) {
 function assignForeign(mainAssignments, rooms, minorLanguageRooms) {
   const assignments = [];
   const languageGroups = groupForeignStudentsByLanguage(mainAssignments);
+  const manualIndexesByLanguage = buildManualForeignRoomIndexes(languageGroups, rooms, minorLanguageRooms);
+  const reservedManualIndexes = new Set([...manualIndexesByLanguage.values()].flat());
   const occupied = new Set();
   let cursor = 0;
 
   for (const { language, students } of languageGroups) {
     const sorted = [...students].sort((a, b) => b.languageScore - a.languageScore || a.studentId.localeCompare(b.studentId, "zh-Hans-CN", { numeric: true }));
-    const preferredIndexes = getPlannedRoomIndexes(minorLanguageRooms[language], rooms);
-    const roomIndexes = preferredIndexes.length ? preferredIndexes : allocateRoomIndexes(sorted.length, rooms, cursor, occupied);
+    const preferredIndexes = manualIndexesByLanguage.get(language) || [];
+    const roomIndexes = preferredIndexes.length ? preferredIndexes : allocateRoomIndexes(sorted.length, rooms, cursor, new Set([...occupied, ...reservedManualIndexes]));
     let studentIndex = 0;
     for (const roomIndex of roomIndexes) {
       const room = rooms[roomIndex];
