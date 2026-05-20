@@ -1276,7 +1276,7 @@ function appendClassSheets(workbook, rows, printSettingsBySheet = {}) {
       .map(({ __className, ...row }) => row);
     const defaultOrientation = recommendExportOrientation(classRows, "classPrint");
     appendSheet(workbook, safeSheetName(className), classRows, {
-      orientation: getExportOrientation(printSettingsBySheet, "classes", className, defaultOrientation),
+      ...getExportPrintSettings(printSettingsBySheet, "classes", className, { orientation: defaultOrientation }),
       profile: "classPrint",
       title: `${className}考场安排`,
       note: "说明：语数物/座位号、语数历/座位号、外语、化学、地理、政治、生物均为“考场/座位号”；黄色底色表示该科为自习安排。",
@@ -1298,18 +1298,20 @@ function appendRoomSheets(workbook, schedule, printSettingsBySheet = {}) {
     return;
   }
   for (const group of groups) {
-    appendSheet(workbook, group.name, group.rows, { orientation: getRoomSheetExportOrientation(printSettingsBySheet, group, recommendExportOrientation(group.rows, "roomPrint")), profile: "roomPrint", title: `${group.name}考场信息表` });
+    appendSheet(workbook, group.name, group.rows, { ...getRoomSheetExportSettings(printSettingsBySheet, group, { orientation: recommendExportOrientation(group.rows, "roomPrint") }), profile: "roomPrint", title: `${group.name}考场信息表` });
   }
 }
 
-function getExportOrientation(settingsBySheet, tabKey, pageKey, fallback) {
-  return settingsBySheet?.[`${tabKey}:${pageKey}`]?.orientation || fallback;
+function getExportPrintSettings(settingsBySheet, tabKey, pageKey, fallback = {}) {
+  return { ...fallback, ...(settingsBySheet?.[`${tabKey}:${pageKey}`] || {}) };
 }
 
-function getRoomSheetExportOrientation(settingsBySheet, group, fallback) {
-  return settingsBySheet?.[`roomDetails:${group.name}`]?.orientation ||
-    (group.foreignPreviewKey ? settingsBySheet?.[`foreign:${group.foreignPreviewKey}`]?.orientation : "") ||
-    fallback;
+function getRoomSheetExportSettings(settingsBySheet, group, fallback = {}) {
+  return {
+    ...fallback,
+    ...(group.foreignPreviewKey ? settingsBySheet?.[`foreign:${group.foreignPreviewKey}`] || {} : {}),
+    ...(settingsBySheet?.[`roomDetails:${group.name}`] || {}),
+  };
 }
 
 function recommendExportOrientation(rows, profile = "") {
@@ -1708,7 +1710,7 @@ function applyCellStyle(sheet, headers = [], rows = [], options = {}) {
       sheet[address].s = {
         font: {
           name: "宋体",
-          sz: getCellFontSize({ row, headerRowIndex, profile, titleRowCount }),
+          sz: getCellFontSize({ row, headerRowIndex, profile, titleRowCount, options }),
           bold: row < titleRowCount ? row === 0 : row === headerRowIndex,
           color: { rgb: "1D1D1F" },
         },
@@ -1731,7 +1733,7 @@ function applyCellStyle(sheet, headers = [], rows = [], options = {}) {
       }
     }
   }
-  const rowHeight = getBodyRowHeight(profile, rows.length);
+  const rowHeight = Number(options.rowHeight) || getBodyRowHeight(profile, rows.length);
   sheet["!rows"] = Array.from({ length: range.e.r + 1 }, (_, index) => ({
     hpt: getRowHeight({ index, titleRowCount, headerRowIndex, profile, rowHeight }),
   }));
@@ -1761,10 +1763,11 @@ function applyCellStyle(sheet, headers = [], rows = [], options = {}) {
   }
 }
 
-function getCellFontSize({ row, headerRowIndex, profile, titleRowCount }) {
+function getCellFontSize({ row, headerRowIndex, profile, titleRowCount, options = {} }) {
   if (row === 0 && titleRowCount) return profile === "timePrint" ? 20 : 14;
   if (row > 0 && row < titleRowCount) return 9;
-  if (row === headerRowIndex) return profile === "timePrint" ? 13 : 10;
+  if (row === headerRowIndex) return Number(options.fontSize) ? Math.max(8, Math.min(12, Number(options.fontSize) + 1)) : (profile === "timePrint" ? 13 : 10);
+  if (Number(options.fontSize)) return Math.max(7, Math.min(28, Number(options.fontSize)));
   if (profile === "timePrint") return 14;
   if (profile === "classPrint" || profile === "roomPrint") return 9;
   return 10;

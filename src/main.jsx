@@ -2099,8 +2099,10 @@ function PreviewPanel({ tabs, activeKey, onChange }) {
       : paperPageOptions;
   const currentPaperPage = selectedPaperPage || visiblePaperPages[0] || null;
   const currentSheetTitle = currentPaperPage?.title || paperPageOptions[0]?.title || "";
+  const currentSheetRows = getPreviewGroupRows(active?.label, paperRows, currentPaperPage?.sheetKey || currentPaperPage?.key);
   const currentPrintKey = getPreviewPrintKey(active?.key || "__none__", currentPaperPage?.sheetKey || currentPaperPage?.key || "__all__");
-  const recommendedPrintSettings = getA4PreviewSettings(active?.label, displayColumns, currentPaperPage?.rows?.length ? currentPaperPage.rows : filteredRows);
+  const recommendedPrintSettings = getA4PreviewSettings(active?.label, displayColumns, currentSheetRows.length ? currentSheetRows : filteredRows);
+  const onePagePrintSettings = getOnePagePreviewSettings(active?.label, displayColumns, currentSheetRows.length ? currentSheetRows : filteredRows, Boolean(currentPaperPage?.note || previewMeta.note));
   const persistPrintSettings = (nextSettings) => {
     setPrintSettings(nextSettings);
     setSheetPrintSettings((current) => {
@@ -2110,6 +2112,11 @@ function PreviewPanel({ tabs, activeKey, onChange }) {
     });
   };
   const applyA4Fit = () => persistPrintSettings(recommendedPrintSettings);
+  const applyOnePageFit = () => {
+    persistPrintSettings(onePagePrintSettings);
+    setSelectedPaperKey("");
+    if (splitSheetPreview) setShowAllSheets(false);
+  };
   const updatePrintPatch = (patch) => persistPrintSettings({ ...printSettings, ...patch });
   const updatePrintSetting = (key, value, min, max) => {
     const nextValue = clampNumber(value, min, max, printSettings[key]);
@@ -2184,6 +2191,7 @@ function PreviewPanel({ tabs, activeKey, onChange }) {
         <div className="paper-toolbar-group print-control-group">
           <span>调纸</span>
           <button type="button" onClick={applyA4Fit}>适配 A4</button>
+          <button type="button" className="soft-button" onClick={applyOnePageFit}>压成一页</button>
           <label className="table-filter compact-control">
             方向
             <select value={printSettings.orientation} onChange={(event) => updatePrintPatch({ orientation: event.target.value })}>
@@ -2195,7 +2203,7 @@ function PreviewPanel({ tabs, activeKey, onChange }) {
             推荐{recommendedPrintSettings.orientation === "portrait" ? "竖向" : "横向"}
           </button>
           <PreviewStepper label="字号" value={printSettings.fontSize} min={8} max={28} step={1} onDecrease={() => stepPrintSetting("fontSize", -1, 8, 28)} onIncrease={() => stepPrintSetting("fontSize", 1, 8, 28)} onChange={(value) => updatePrintSetting("fontSize", value, 8, 28)} />
-          <PreviewStepper label="行高" value={printSettings.rowHeight} min={12} max={72} step={1} onDecrease={() => stepPrintSetting("rowHeight", -1, 12, 72)} onIncrease={() => stepPrintSetting("rowHeight", 1, 12, 72)} onChange={(value) => updatePrintSetting("rowHeight", value, 12, 72)} />
+          <PreviewStepper label="行高" value={printSettings.rowHeight} min={8} max={72} step={1} onDecrease={() => stepPrintSetting("rowHeight", -1, 8, 72)} onIncrease={() => stepPrintSetting("rowHeight", 1, 8, 72)} onChange={(value) => updatePrintSetting("rowHeight", value, 8, 72)} />
           <PreviewStepper label="缩放" value={printSettings.zoom} min={55} max={120} suffix="%" onDecrease={() => stepPrintSetting("zoom", -5, 55, 120)} onIncrease={() => stepPrintSetting("zoom", 5, 55, 120)} onChange={(value) => updatePrintSetting("zoom", value, 55, 120)} />
           <button type="button" className="icon-button" onClick={() => setExpanded((value) => !value)} title={expanded ? "退出 Excel 预览" : "打开 Excel 预览"}>
             {expanded ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
@@ -2282,6 +2290,12 @@ function getPaperPageOptions(pages, query, rowQuery = "", filters = {}) {
     const matchesFilters = activeFilters.every(([column, value]) => page.rows.some((row) => String(row[column] ?? "") === String(value)));
     return matchesSheet && matchesRowQuery && matchesFilters;
   });
+}
+
+function getPreviewGroupRows(label, rows, sheetKey) {
+  if (!sheetKey) return rows;
+  const group = groupRowsForPreviewPages(label, rows).find((item) => item.key === sheetKey);
+  return group?.rows || rows;
 }
 
 function loadPreviewPrintSettings() {
@@ -2462,9 +2476,9 @@ function getRowsPerPreviewPage(label, settings, hasNote) {
   const headerHeight = 24;
   const footerHeight = 24;
   const available = pageHeight - verticalPadding - titleHeight - noteHeight - headerHeight - footerHeight;
-  const baseRows = Math.floor(available / Math.max(12, settings.rowHeight || 18));
-  if (String(label || "").includes("考场信息")) return Math.max(22, Math.min(baseRows, 42));
-  if (String(label || "").includes("班主任")) return Math.max(28, Math.min(baseRows, 48));
+  const baseRows = Math.floor(available / Math.max(8, settings.rowHeight || 18));
+  if (String(label || "").includes("考场信息")) return Math.max(22, baseRows);
+  if (String(label || "").includes("班主任")) return Math.max(28, baseRows);
   return Math.max(12, baseRows);
 }
 
@@ -2495,6 +2509,36 @@ function getA4PreviewSettings(label, columns = [], rows = []) {
     fontSize: estimated.fontSize,
     rowHeight: estimated.rowHeight,
     zoom: estimated.zoom,
+  };
+}
+
+function getOnePagePreviewSettings(label, columns = [], rows = [], hasNote = false) {
+  const portrait = estimateOnePageNeed(label, "portrait", columns, rows, hasNote);
+  const landscape = estimateOnePageNeed(label, "landscape", columns, rows, hasNote);
+  if (portrait.widthFit && portrait.rowHeight >= 8) return portrait;
+  if (landscape.widthFit && landscape.rowHeight >= 8) return landscape;
+  return portrait.score <= landscape.score ? portrait : landscape;
+}
+
+function estimateOnePageNeed(label, orientation, columns, rows, hasNote) {
+  const rowCount = Math.max(1, rows.length);
+  const pageHeight = orientation === "landscape" ? 794 : 1123;
+  const verticalPadding = 60;
+  const titleHeight = 34;
+  const noteHeight = hasNote ? 26 : 0;
+  const headerHeight = 24;
+  const footerHeight = 24;
+  const availableHeight = pageHeight - verticalPadding - titleHeight - noteHeight - headerHeight - footerHeight;
+  const rowHeight = clampNumber(Math.floor(availableHeight / rowCount), 8, 22, 14);
+  const fontSize = clampNumber(rowHeight - 4, 8, 11, 9);
+  const widthNeed = estimatePaperNeed(label, orientation, columns, rows);
+  return {
+    orientation,
+    fontSize,
+    rowHeight,
+    zoom: orientation === "portrait" ? 96 : 88,
+    widthFit: widthNeed.widthFit,
+    score: Math.max(widthNeed.score, rowHeight <= 8 ? 1.15 : 0.85),
   };
 }
 
