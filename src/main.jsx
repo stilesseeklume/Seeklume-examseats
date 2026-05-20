@@ -2087,7 +2087,7 @@ function PreviewPanel({ tabs, activeKey, onChange }) {
   const paperRows = splitSheetPreview ? activeRows : rows;
   const displayColumns = getPreviewDisplayColumns(active?.label, paperRows.length ? Object.keys(paperRows[0]) : columns);
   const previewMeta = getPreviewSheetMeta(active?.label, displayColumns.length, paperRows.length);
-  const allPaperPages = buildPaperPreviewPages(active?.label, paperRows, displayColumns, printSettings, previewMeta);
+  const allPaperPages = buildPaperPreviewPages(active?.label, paperRows, displayColumns, printSettings, previewMeta, sheetPrintSettings, active?.key || "__none__");
   const paperPageOptions = splitSheetPreview
     ? getPaperPageOptions(allPaperPages, sheetQuery, query, filters)
     : getPaperPageOptions(allPaperPages, sheetQuery);
@@ -2144,7 +2144,7 @@ function PreviewPanel({ tabs, activeKey, onChange }) {
       <div className="preview-sheet-meta">
         <div>
           <strong>{active.label}</strong>
-          <small>先选一张纸，再只调整这一张纸的打印样式。</small>
+          <small>这里是打印调整台；搜索只定位纸张，不改变真实分页。</small>
         </div>
         <span>{filteredRows.length}/{activeRows.length} 行</span>
       </div>
@@ -2241,7 +2241,7 @@ function PreviewPanel({ tabs, activeKey, onChange }) {
             </div>
           )}
           {visiblePaperPages.map((page) => {
-            const pageSettings = getPagePrintSettings(active.key, page, getA4PreviewSettings(active?.label, displayColumns, page.rows), sheetPrintSettings);
+            const pageSettings = getPagePrintSettings(active.key, page, page.printSettings || getA4PreviewSettings(active?.label, displayColumns, page.sheetRows || page.rows), sheetPrintSettings);
             return (
               <div
                 className={`excel-page ${pageSettings.orientation}`}
@@ -2396,11 +2396,13 @@ function getPreviewSheetMeta(label, columnCount, rowCount) {
   };
 }
 
-function buildPaperPreviewPages(label, rows, columns, settings, meta) {
-  const rowsPerPage = getRowsPerPreviewPage(label, settings, Boolean(meta.note));
+function buildPaperPreviewPages(label, rows, columns, settings, meta, settingsBySheet = {}, tabKey = "__none__") {
   const grouped = groupRowsForPreviewPages(label, rows);
   const pages = [];
   for (const group of grouped) {
+    const groupDefaultSettings = getA4PreviewSettings(label, columns, group.rows);
+    const groupSettings = getPagePrintSettings(tabKey, { sheetKey: group.key, key: group.key }, groupDefaultSettings || settings, settingsBySheet);
+    const rowsPerPage = getRowsPerPreviewPage(label, groupSettings, Boolean(group.note || meta.note));
     const chunks = chunkRows(group.rows, rowsPerPage);
     chunks.forEach((chunk, chunkIndex) => {
       pages.push({
@@ -2409,12 +2411,14 @@ function buildPaperPreviewPages(label, rows, columns, settings, meta) {
         title: group.title || meta.title,
         note: group.note || meta.note,
         rows: chunk,
+        sheetRows: group.rows,
+        printSettings: groupSettings,
         pageNumber: pages.length + 1,
         columns,
       });
     });
   }
-  return pages.length ? pages : [{ key: "empty", sheetKey: "empty", title: meta.title, note: meta.note, rows: [], pageNumber: 1, columns }];
+  return pages.length ? pages : [{ key: "empty", sheetKey: "empty", title: meta.title, note: meta.note, rows: [], sheetRows: [], printSettings: settings, pageNumber: 1, columns }];
 }
 
 function groupRowsForPreviewPages(label, rows) {
