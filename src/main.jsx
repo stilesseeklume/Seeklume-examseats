@@ -2084,10 +2084,13 @@ function PreviewPanel({ tabs, activeKey, onChange }) {
   const filteredRows = useMemo(() => filterTableRows(activeRows, query, filters), [activeRows, query, filters]);
   const splitSheetPreview = isSplitSheetPreview(active?.label);
   const rows = splitSheetPreview || expanded || showAll ? filteredRows : filteredRows.slice(0, 80);
-  const displayColumns = getPreviewDisplayColumns(active?.label, rows.length ? Object.keys(rows[0]) : columns);
-  const previewMeta = getPreviewSheetMeta(active?.label, displayColumns.length, rows.length);
-  const allPaperPages = buildPaperPreviewPages(active?.label, rows, displayColumns, printSettings, previewMeta);
-  const paperPageOptions = getPaperPageOptions(allPaperPages, sheetQuery);
+  const paperRows = splitSheetPreview ? activeRows : rows;
+  const displayColumns = getPreviewDisplayColumns(active?.label, paperRows.length ? Object.keys(paperRows[0]) : columns);
+  const previewMeta = getPreviewSheetMeta(active?.label, displayColumns.length, paperRows.length);
+  const allPaperPages = buildPaperPreviewPages(active?.label, paperRows, displayColumns, printSettings, previewMeta);
+  const paperPageOptions = splitSheetPreview
+    ? getPaperPageOptions(allPaperPages, sheetQuery, query, filters)
+    : getPaperPageOptions(allPaperPages, sheetQuery);
   const selectedPaperPage = allPaperPages.find((page) => page.key === selectedPaperKey);
   const visiblePaperPages = selectedPaperPage
     ? [selectedPaperPage]
@@ -2163,7 +2166,7 @@ function PreviewPanel({ tabs, activeKey, onChange }) {
           <span>查人</span>
           <label className="table-search">
             <Search size={15} />
-            <input value={query} placeholder="姓名/考号/班级/考场" onChange={(event) => setQuery(event.target.value)} />
+            <input value={query} placeholder="姓名/考号/班级/考场" onChange={(event) => { setQuery(event.target.value); if (splitSheetPreview) setSelectedPaperKey(""); }} />
           </label>
           {filterColumns.map((column) => (
             <label className="table-filter" key={column}>
@@ -2268,10 +2271,17 @@ function PreviewPanel({ tabs, activeKey, onChange }) {
   );
 }
 
-function getPaperPageOptions(pages, query) {
-  const term = String(query || "").trim().toLowerCase();
-  if (!term) return pages;
-  return pages.filter((page) => [page.title, page.note, page.key].some((value) => String(value || "").toLowerCase().includes(term)));
+function getPaperPageOptions(pages, query, rowQuery = "", filters = {}) {
+  const sheetTerm = String(query || "").trim().toLowerCase();
+  const rowTerm = String(rowQuery || "").trim().toLowerCase();
+  const activeFilters = Object.entries(filters).filter(([, value]) => String(value || "").trim());
+  return pages.filter((page) => {
+    const pageText = [page.title, page.note, page.key, page.sheetKey].some((value) => String(value || "").toLowerCase().includes(sheetTerm));
+    const matchesSheet = !sheetTerm || pageText || page.rows.some((row) => Object.values(row).some((value) => String(value || "").toLowerCase().includes(sheetTerm)));
+    const matchesRowQuery = !rowTerm || page.rows.some((row) => Object.values(row).some((value) => String(value || "").toLowerCase().includes(rowTerm)));
+    const matchesFilters = activeFilters.every(([column, value]) => page.rows.some((row) => String(row[column] ?? "") === String(value)));
+    return matchesSheet && matchesRowQuery && matchesFilters;
+  });
 }
 
 function loadPreviewPrintSettings() {
