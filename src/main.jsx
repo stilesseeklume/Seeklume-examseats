@@ -2550,11 +2550,8 @@ function estimatePreviewPageFit(label, columns, rows) {
   const paper = String(label || "");
   const portrait = estimatePaperNeed(paper, "portrait", columns, rows);
   const landscape = estimatePaperNeed(paper, "landscape", columns, rows);
-  const portraitFits = portrait.widthFit && portrait.heightFit;
-  const landscapeFits = landscape.widthFit && landscape.heightFit;
-  if (portraitFits && !landscapeFits) return portrait;
-  if (landscapeFits && !portraitFits) return landscape;
-  if (portraitFits && landscapeFits) return portrait.score <= landscape.score ? portrait : landscape;
+  if (portrait.widthFit) return portrait;
+  if (landscape.widthFit) return landscape;
   return portrait.score <= landscape.score ? portrait : landscape;
 }
 

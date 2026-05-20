@@ -1362,9 +1362,9 @@ function getRoomSheetExportSettings(settingsBySheet, group, fallback = {}) {
 
 function recommendExportOrientation(rows, profile = "") {
   const headers = Object.keys(rows[0] || {}).filter((header) => !header.startsWith("__"));
-  if (profile === "roomPrint" && headers.length <= 6 && rows.length <= 46) return "portrait";
-  if (profile === "classPrint" && headers.length <= 8 && rows.length <= 42) return "portrait";
-  return headers.length >= 8 ? "landscape" : "portrait";
+  if (profile === "roomPrint" && headers.length <= 7) return "portrait";
+  if (profile === "classPrint" && headers.length <= 9) return "portrait";
+  return headers.length >= 10 ? "landscape" : "portrait";
 }
 
 function statusSort(a, b) {
@@ -1688,7 +1688,7 @@ function setSheetPrintDefaults(sheet, headers = [], rows = [], options = {}) {
   sheet["!freeze"] = { xSplit: 0, ySplit: (options.titleRowCount || 0) + 1 };
   sheet["!pageSetup"] = {
     paperSize: 9,
-    orientation: options.orientation || (headers.length > 8 || rows.length > 24 ? "landscape" : "portrait"),
+    orientation: options.orientation || (headers.length >= 10 ? "landscape" : "portrait"),
     fitToWidth: 1,
     fitToHeight: 1,
   };
