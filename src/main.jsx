@@ -2229,27 +2229,39 @@ function PreviewPanel({ tabs, activeKey, onChange }) {
               <div className="preview-empty-sheet">没有匹配到 sheet，换个班级、科目或考场号试试。</div>
             </div>
           )}
-          {visiblePaperPages.map((page) => (
-            <div className={`excel-page ${getPagePrintSettings(active.key, page, printSettings, sheetPrintSettings).orientation}`} key={page.key} onDoubleClick={() => setExpanded(true)}>
-              <div className="preview-print-title">{page.title}</div>
-              {page.note && <div className="preview-print-note">{page.note}</div>}
-              <div className={`table-wrap preview-table ${expanded ? "expanded" : ""}`}>
-                <table>
-                  <thead>
-                    <tr>{displayColumns.map((column) => <th key={column}>{column}</th>)}</tr>
-                  </thead>
-                  <tbody>
-                    {page.rows.map((row, index) => (
-                      <tr key={row.考号 ? `${row.考号}-${index}` : index}>
-                        {displayColumns.map((column) => <td className={row.__selfStudy || row[`__selfStudy:${column}`] ? "preview-self-study" : ""} key={column}>{row[column]}</td>)}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+          {visiblePaperPages.map((page) => {
+            const pageSettings = getPagePrintSettings(active.key, page, getA4PreviewSettings(active?.label, displayColumns, page.rows), sheetPrintSettings);
+            return (
+              <div
+                className={`excel-page ${pageSettings.orientation}`}
+                key={page.key}
+                onDoubleClick={() => setExpanded(true)}
+                style={{
+                  "--preview-font-size": `${pageSettings.fontSize}px`,
+                  "--preview-row-height": `${pageSettings.rowHeight}px`,
+                  "--preview-zoom": pageSettings.zoom / 100,
+                }}
+              >
+                <div className="preview-print-title">{page.title}</div>
+                {page.note && <div className="preview-print-note">{page.note}</div>}
+                <div className={`table-wrap preview-table ${expanded ? "expanded" : ""}`}>
+                  <table>
+                    <thead>
+                      <tr>{displayColumns.map((column) => <th key={column}>{column}</th>)}</tr>
+                    </thead>
+                    <tbody>
+                      {page.rows.map((row, index) => (
+                        <tr key={row.考号 ? `${row.考号}-${index}` : index}>
+                          {displayColumns.map((column) => <td className={row.__selfStudy || row[`__selfStudy:${column}`] ? "preview-self-study" : ""} key={column}>{row[column]}</td>)}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+                <div className="preview-page-footer">第 {page.pageNumber} / {allPaperPages.length} 页</div>
               </div>
-              <div className="preview-page-footer">第 {page.pageNumber} / {allPaperPages.length} 页</div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
     </div>
