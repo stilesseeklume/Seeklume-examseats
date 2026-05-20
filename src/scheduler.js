@@ -1223,7 +1223,7 @@ function defaultExportSuffix(group) {
 
 function appendSheet(workbook, name, rows, options = {}) {
   const bodyRows = rows.length ? rows : [{ 提示: "暂无数据" }];
-  const headers = Object.keys(bodyRows[0]).filter((header) => !header.startsWith("__"));
+  const headers = collectSheetHeaders(bodyRows);
   const visibleRows = bodyRows.map((row) => Object.fromEntries(headers.map((header) => [header, row[header]])));
   const titleRows = options.title ? [[options.title], ...(options.note ? [[options.note]] : [])] : [];
   const sheet = options.title ? XLSX.utils.aoa_to_sheet(titleRows) : XLSX.utils.json_to_sheet(visibleRows);
@@ -1233,6 +1233,40 @@ function appendSheet(workbook, name, rows, options = {}) {
   setSheetPrintDefaults(sheet, headers, bodyRows, { ...options, titleRowCount: titleRows.length });
   if (options.title) ensureTitleMerge(sheet, headers, options.title, options.note);
   XLSX.utils.book_append_sheet(workbook, sheet, safeSheetName(name));
+}
+
+function collectSheetHeaders(rows = []) {
+  const seen = new Set();
+  for (const row of rows) {
+    for (const header of Object.keys(row || {})) {
+      if (!header.startsWith("__")) seen.add(header);
+    }
+  }
+  return [...seen].sort((a, b) => sheetHeaderOrder(a) - sheetHeaderOrder(b));
+}
+
+function sheetHeaderOrder(header) {
+  const order = [
+    "序号",
+    "姓名",
+    "考号",
+    "班级",
+    "选科",
+    "语数物/座位号",
+    "语数历/座位号",
+    "外语",
+    "化学",
+    "地理",
+    "政治",
+    "生物",
+    "当科",
+    "考场号",
+    "座位号",
+    "门牌号",
+    "教室",
+  ];
+  const index = order.indexOf(header);
+  return index >= 0 ? index : 100 + order.length;
 }
 
 function ensureTitleMerge(sheet, headers, title, note = "") {
@@ -1274,14 +1308,26 @@ function appendClassSheets(workbook, rows, printSettingsBySheet = {}) {
     const classRows = rows
       .filter((row) => row.__className === className)
       .map(({ __className, ...row }) => row);
-    const defaultOrientation = recommendExportOrientation(classRows, "classPrint");
-    appendSheet(workbook, safeSheetName(className), classRows, {
+    const compactClassRows = trimUnusedMainExamColumns(classRows);
+    const defaultOrientation = recommendExportOrientation(compactClassRows, "classPrint");
+    appendSheet(workbook, safeSheetName(className), compactClassRows, {
       ...getExportPrintSettings(printSettingsBySheet, "classes", className, { orientation: defaultOrientation }),
       profile: "classPrint",
       title: `${className}考场安排`,
       note: "说明：语数物/座位号、语数历/座位号、外语、化学、地理、政治、生物均为“考场/座位号”；黄色底色表示该科为自习安排。",
     });
   }
+}
+
+function trimUnusedMainExamColumns(rows) {
+  const hasPhysics = rows.some((row) => safeString(row["语数物/座位号"]));
+  const hasHistory = rows.some((row) => safeString(row["语数历/座位号"]));
+  return rows.map((row) => {
+    const next = { ...row };
+    if (!hasPhysics) delete next["语数物/座位号"];
+    if (!hasHistory) delete next["语数历/座位号"];
+    return next;
+  });
 }
 
 function appendSubjectSheets(workbook, schedule) {
@@ -1353,12 +1399,14 @@ export function buildAdminRows(rows) {
 
 export function buildPrintRows(rows) {
   return rows.map((row) => {
-    const mainHeader = mainExamHeader(row);
+    const isPhysics = safeString(row.首选科目).includes("物理");
+    const mainCell = compactRoomSeat(row.语数物历考场, row.语数物历座位);
     return {
       姓名: row.姓名,
       考号: row.考号,
       选科: compactComboLabel(row.选科组合),
-      [mainHeader]: compactRoomSeat(row.语数物历考场, row.语数物历座位),
+      "语数物/座位号": isPhysics ? mainCell : "",
+      "语数历/座位号": isPhysics ? "" : mainCell,
       外语: compactRoomSeat(row.外语考场, row.外语座位),
       化学: compactSubjectCell(row, "化学"),
       地理: compactSubjectCell(row, "地理"),
@@ -1628,10 +1676,6 @@ function compactSubjectCell(row, subject) {
   const seatText = parseSubjectSeat(row, subject);
   if (!roomText && !seatText) return "";
   return [extractRoomNumber(roomText) || roomText, seatText || ""].filter(Boolean).join("/");
-}
-
-function mainExamHeader(row) {
-  return safeString(row.首选科目).includes("物理") ? "语数物/座位号" : "语数历/座位号";
 }
 
 function setSheetPrintDefaults(sheet, headers = [], rows = [], options = {}) {

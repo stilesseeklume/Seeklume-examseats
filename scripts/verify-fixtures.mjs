@@ -112,6 +112,7 @@ assertLanguageUsesOnlyRooms(manualJapaneseSchedule.foreignAssignments, "日语",
 assertLanguageUsesOnlyRooms(manualJapaneseDoorSchedule.foreignAssignments, "日语", ["6"]);
 assertManualForeignRoomBlocksWhenInsufficient(insufficientJapaneseSchedule, "日语");
 assertPrintRowsHideScores(buildPrintRows(splitSchedule.allRows), "班主任表");
+assertMainExamColumnsAreStable(buildPrintRows(splitSchedule.allRows));
 assertPrintRowsHideScores(buildSubjectPrintRows(splitSchedule, "化学"), "科目表");
 assertPrintRowsHideScores(buildRoomPrintRows(splitSchedule), "考场信息表");
 assertRoomPrintRowsShowForeignLanguage(buildRoomPrintRows(splitSchedule));
@@ -188,6 +189,16 @@ function assertPrintRowsHideScores(rows, label) {
       throw new Error(`${label} 不应包含敏感列：${field}`);
     }
   }
+}
+
+function assertMainExamColumnsAreStable(rows) {
+  const headers = new Set(rows.flatMap((row) => Object.keys(row)));
+  if (!headers.has("语数物/座位号")) throw new Error("班主任表应稳定包含语数物/座位号列");
+  if (!headers.has("语数历/座位号")) throw new Error("班主任表应稳定包含语数历/座位号列");
+  const physicsRow = rows.find((row) => String(row.考号).startsWith("P"));
+  const historyRow = rows.find((row) => String(row.考号).startsWith("H"));
+  if (!physicsRow?.["语数物/座位号"]) throw new Error("物理类学生应写入语数物/座位号");
+  if (!historyRow?.["语数历/座位号"]) throw new Error("历史类学生应写入语数历/座位号");
 }
 
 function assertRoomPrintRowsShowForeignLanguage(rows) {

@@ -2687,10 +2687,24 @@ function describePreviewAssignments(assignments = []) {
 }
 
 function buildClassPreviewRows(rows) {
-  return rows
+  const printRows = rows
     .slice()
     .sort((a, b) => String(a.班级).localeCompare(String(b.班级), "zh-Hans-CN", { numeric: true }) || String(a.考号).localeCompare(String(b.考号), "zh-Hans-CN", { numeric: true }))
     .map((row) => ({ __pageGroup: row.班级, 班级分组: row.班级, ...buildPrintRows([row])[0] }));
+  const rowsByClass = new Map();
+  for (const row of printRows) {
+    if (!rowsByClass.has(row.__pageGroup)) rowsByClass.set(row.__pageGroup, []);
+    rowsByClass.get(row.__pageGroup).push(row);
+  }
+  return printRows.map((row) => {
+    const classRows = rowsByClass.get(row.__pageGroup) || [];
+    const hasPhysics = classRows.some((item) => String(item["语数物/座位号"] || "").trim());
+    const hasHistory = classRows.some((item) => String(item["语数历/座位号"] || "").trim());
+    const next = { ...row };
+    if (!hasPhysics) delete next["语数物/座位号"];
+    if (!hasHistory) delete next["语数历/座位号"];
+    return next;
+  });
 }
 
 function buildRoomPreviewRows(schedule) {
