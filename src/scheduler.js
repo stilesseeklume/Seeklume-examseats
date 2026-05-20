@@ -1298,12 +1298,18 @@ function appendRoomSheets(workbook, schedule, printSettingsBySheet = {}) {
     return;
   }
   for (const group of groups) {
-    appendSheet(workbook, group.name, group.rows, { orientation: getExportOrientation(printSettingsBySheet, "roomDetails", group.name, recommendExportOrientation(group.rows, "roomPrint")), profile: "roomPrint", title: `${group.name}考场信息表` });
+    appendSheet(workbook, group.name, group.rows, { orientation: getRoomSheetExportOrientation(printSettingsBySheet, group, recommendExportOrientation(group.rows, "roomPrint")), profile: "roomPrint", title: `${group.name}考场信息表` });
   }
 }
 
 function getExportOrientation(settingsBySheet, tabKey, pageKey, fallback) {
   return settingsBySheet?.[`${tabKey}:${pageKey}`]?.orientation || fallback;
+}
+
+function getRoomSheetExportOrientation(settingsBySheet, group, fallback) {
+  return settingsBySheet?.[`roomDetails:${group.name}`]?.orientation ||
+    (group.foreignPreviewKey ? settingsBySheet?.[`foreign:${group.foreignPreviewKey}`]?.orientation : "") ||
+    fallback;
 }
 
 function recommendExportOrientation(rows, profile = "") {
@@ -1407,15 +1413,16 @@ function extractRoomNumber(value) {
 
 export function toInvigilatorRow(row, options = {}) {
   const isSelfStudy = row.状态 === "自习";
+  const subjectName = displayRoomSheetSubject(row);
   const base = {
     姓名: row.姓名,
     考号: row.考号,
     班级: row.班级,
     考场号: row.考场号,
     座位号: row.座位号,
-    当科: isSelfStudy ? "自习" : displayPlanName(row.考试类型),
+    当科: isSelfStudy ? "自习" : subjectName,
   };
-  const withPlan = options.includePlan ? { 科目: displayPlanName(row.考试类型), ...base } : base;
+  const withPlan = options.includePlan ? { 科目: subjectName, ...base } : base;
   return withPlan;
 }
 
@@ -1426,11 +1433,16 @@ export function buildRoomPrintRows(schedule) {
 function buildRoomSheetGroups(schedule) {
   const rows = buildRoomDetailRows(schedule);
   const groupMap = new Map();
+  const groupMeta = new Map();
   for (const row of rows) {
     const isSelfStudy = row.状态 === "自习";
     const suffix = isSelfStudy ? `${row.考场号}自习室` : row.考场号;
-    const name = `${displayPlanName(row.考试类型)}-${suffix}`;
+    const subjectName = displayRoomSheetSubject(row);
+    const name = `${subjectName}-${suffix}`;
     if (!groupMap.has(name)) groupMap.set(name, []);
+    if (!groupMeta.has(name) && row.考试类型 === "外语") {
+      groupMeta.set(name, { foreignPreviewKey: `${subjectName}|${row.考场号}` });
+    }
     groupMap.get(name).push(toInvigilatorRow(row));
   }
   return [...groupMap.entries()]
@@ -1439,11 +1451,17 @@ function buildRoomSheetGroups(schedule) {
       name,
       rows: groupRows.sort((a, b) => toNumber(a.座位号) - toNumber(b.座位号)),
       profile: "roomPrint",
+      ...(groupMeta.get(name) || {}),
     }));
 }
 
 function displayPlanName(plan) {
   return plan === "主考" ? "语数物历" : plan;
+}
+
+function displayRoomSheetSubject(row) {
+  if (row.考试类型 === "外语") return row.外语语种 || "外语";
+  return displayPlanName(row.考试类型);
 }
 
 export function buildRoomSummaryRows(schedule, rooms) {

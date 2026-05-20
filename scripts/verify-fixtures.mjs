@@ -114,6 +114,7 @@ assertManualForeignRoomBlocksWhenInsufficient(insufficientJapaneseSchedule, "日
 assertPrintRowsHideScores(buildPrintRows(splitSchedule.allRows), "班主任表");
 assertPrintRowsHideScores(buildSubjectPrintRows(splitSchedule, "化学"), "科目表");
 assertPrintRowsHideScores(buildRoomPrintRows(splitSchedule), "考场信息表");
+assertRoomPrintRowsShowForeignLanguage(buildRoomPrintRows(splitSchedule));
 assertSelfStudyRoomsAreNumeric(buildPrintRows(splitSchedule.allRows));
 assertForeignDoorSummary(buildDoorRows(splitSchedule, rooms));
 
@@ -186,6 +187,13 @@ function assertPrintRowsHideScores(rows, label) {
     if (headers.includes(field)) {
       throw new Error(`${label} 不应包含敏感列：${field}`);
     }
+  }
+}
+
+function assertRoomPrintRowsShowForeignLanguage(rows) {
+  const japaneseRows = rows.filter((row) => row.科目 === "日语" || row.当科 === "日语");
+  if (!japaneseRows.length) {
+    throw new Error("考场信息表里的外语考场应显示具体语种，例如日语，而不是笼统写外语");
   }
 }
 
