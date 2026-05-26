@@ -10,6 +10,7 @@ import {
   Clock3,
   FilePlus2,
   Filter,
+  History,
   Maximize2,
   Minimize2,
   House,
@@ -183,20 +184,23 @@ function App() {
 
   useEffect(() => {
     if (view !== "workspace") return;
-    saveWorkspaceDraft({
-      examName,
-      examDate,
-      physics,
-      history,
-      rooms,
-      minorRooms,
-      scheduleMode,
-      examTimes,
-      selected,
-      exportMode,
-      activeStep,
-      previewKey,
-    });
+    const timer = setTimeout(() => {
+      saveWorkspaceDraft({
+        examName,
+        examDate,
+        physics,
+        history,
+        rooms,
+        minorRooms,
+        scheduleMode,
+        examTimes,
+        selected,
+        exportMode,
+        activeStep,
+        previewKey,
+      });
+    }, 400);
+    return () => clearTimeout(timer);
   }, [view, examName, examDate, physics, history, rooms, minorRooms, scheduleMode, examTimes, selected, exportMode, activeStep, previewKey]);
 
   const handleStudentFile = async (file, pool) => {
@@ -566,7 +570,7 @@ function App() {
                     <td><input value={room.roomNo} onChange={(event) => updateRoom(index, { roomNo: event.target.value })} /></td>
                     <td><input value={room.doorNo} onChange={(event) => updateRoom(index, { doorNo: event.target.value })} /></td>
                     <td><input value={room.roomName} onChange={(event) => updateRoom(index, { roomName: event.target.value })} /></td>
-                    <td><input type="number" min="1" value={room.capacity} onChange={(event) => updateRoom(index, { capacity: Number(event.target.value) || 40 })} /></td>
+                    <td><DraftNumberInput value={room.capacity} min={1} fallback={40} onChange={(capacity) => updateRoom(index, { capacity })} /></td>
                     <td><button type="button" onClick={() => removeRoom(index)}>删除</button></td>
                   </tr>
                 ))}
@@ -1442,6 +1446,29 @@ function MinorRoomInput({ placeholder, value, onCommit }) {
   );
 }
 
+function DraftNumberInput({ value, min = 1, fallback = 1, onChange }) {
+  const [draft, setDraft] = useState(String(value ?? ""));
+  useEffect(() => { setDraft(String(value ?? "")); }, [value]);
+  const commit = () => {
+    const num = Number(draft);
+    if (Number.isFinite(num) && num >= min) {
+      onChange(num);
+    } else {
+      setDraft(String(value ?? fallback));
+    }
+  };
+  return (
+    <input
+      type="number"
+      min={min}
+      value={draft}
+      onChange={(event) => setDraft(event.target.value)}
+      onBlur={commit}
+      onKeyDown={(event) => { if (event.key === "Enter") event.currentTarget.blur(); }}
+    />
+  );
+}
+
 function Metric({ label, value }) {
   return (
     <div className="metric">
@@ -2047,232 +2074,221 @@ function patchStudent(student, patch, pool) {
 
 function PreviewPanel({ tabs, activeKey, onChange }) {
   const active = tabs.find((tab) => tab.key === activeKey) || tabs[0];
-  const [showAll, setShowAll] = useState(false);
   const [query, setQuery] = useState("");
   const [filters, setFilters] = useState({});
+  const [currentPageIndex, setCurrentPageIndex] = useState(0);
+  const [pageSettings, setPageSettings] = useState({});
   const [expanded, setExpanded] = useState(false);
-  const [sheetQuery, setSheetQuery] = useState("");
-  const [selectedPaperKey, setSelectedPaperKey] = useState("");
-  const [showAllSheets, setShowAllSheets] = useState(true);
-  const [printSettings, setPrintSettings] = useState({
-    orientation: "landscape",
-    fontSize: 11,
-    rowHeight: 22,
-    zoom: 92,
-  });
-  const [sheetPrintSettings, setSheetPrintSettings] = useState(loadPreviewPrintSettings);
   useEffect(() => {
-    setShowAll(false);
+    setCurrentPageIndex(0);
     setQuery("");
     setFilters({});
-    setExpanded(false);
-    setSelectedPaperKey("");
-    setShowAllSheets(true);
-    if (active) {
-      setPrintSettings(
-        getA4PreviewSettings(
-          active.label,
-          (active.rows?.[0] && Object.keys(active.rows[0]).filter((column) => !column.startsWith("__"))) || [],
-          active.rows || [],
-        ),
-      );
-    }
   }, [activeKey]);
-  const activeRows = active?.rows || [];
-  const columns = activeRows.length ? Object.keys(activeRows[0]) : [];
-  const filterColumns = getPreviewFilterColumns(columns);
-  const filteredRows = useMemo(() => filterTableRows(activeRows, query, filters), [activeRows, query, filters]);
-  const splitSheetPreview = isSplitSheetPreview(active?.label);
-  const rows = splitSheetPreview || expanded || showAll ? filteredRows : filteredRows.slice(0, 80);
-  const paperRows = splitSheetPreview ? activeRows : rows;
-  const displayColumns = getPreviewDisplayColumns(active?.label, paperRows.length ? Object.keys(paperRows[0]) : columns);
-  const previewMeta = getPreviewSheetMeta(active?.label, displayColumns.length, paperRows.length);
-  const allPaperPages = buildPaperPreviewPages(active?.label, paperRows, displayColumns, printSettings, previewMeta, sheetPrintSettings, active?.key || "__none__");
-  const paperPageOptions = splitSheetPreview
-    ? getPaperPageOptions(allPaperPages, sheetQuery, query, filters)
-    : getPaperPageOptions(allPaperPages, sheetQuery);
-  const selectedPaperPage = allPaperPages.find((page) => page.key === selectedPaperKey);
-  const visiblePaperPages = selectedPaperPage
-    ? [selectedPaperPage]
-    : splitSheetPreview && !showAllSheets
-      ? paperPageOptions.slice(0, 1)
-      : paperPageOptions;
-  const currentPaperPage = selectedPaperPage || visiblePaperPages[0] || null;
-  const currentSheetTitle = currentPaperPage?.title || paperPageOptions[0]?.title || "";
-  const currentSheetRows = getPreviewGroupRows(active?.label, paperRows, currentPaperPage?.sheetKey || currentPaperPage?.key);
-  const currentPrintKey = getPreviewPrintKey(active?.key || "__none__", currentPaperPage?.sheetKey || currentPaperPage?.key || "__all__");
-  const recommendedPrintSettings = getA4PreviewSettings(active?.label, displayColumns, currentSheetRows.length ? currentSheetRows : filteredRows);
-  const onePagePrintSettings = getOnePagePreviewSettings(active?.label, displayColumns, currentSheetRows.length ? currentSheetRows : filteredRows, Boolean(currentPaperPage?.note || previewMeta.note));
-  const persistPrintSettings = (nextSettings) => {
-    setPrintSettings(nextSettings);
-    setSheetPrintSettings((current) => {
-      const next = { ...current, [currentPrintKey]: nextSettings };
-      localStorage.setItem("preview-print-settings", JSON.stringify(next));
-      return next;
-    });
-  };
-  const applyA4Fit = () => persistPrintSettings(recommendedPrintSettings);
-  const applyOnePageFit = () => {
-    persistPrintSettings(onePagePrintSettings);
-    setSelectedPaperKey("");
-    if (splitSheetPreview) setShowAllSheets(false);
-  };
-  const updatePrintPatch = (patch) => persistPrintSettings({ ...printSettings, ...patch });
-  const updatePrintSetting = (key, value, min, max) => {
-    const nextValue = clampNumber(value, min, max, printSettings[key]);
-    updatePrintPatch({ [key]: nextValue });
-  };
-  const stepPrintSetting = (key, delta, min, max) => {
-    updatePrintPatch({ [key]: clampNumber((Number(printSettings[key]) || 0) + delta, min, max, printSettings[key]) });
-  };
-  const sheetOptions = tabs;
-  useEffect(() => {
-    const saved = sheetPrintSettings[currentPrintKey];
-    const next = saved || recommendedPrintSettings;
-    setPrintSettings((current) => (samePrintSettings(current, next) ? current : next));
-  }, [currentPrintKey]);
+
   if (!active) return null;
+
+  const activeRows = active.rows || [];
+  const allColumns = activeRows.length ? Object.keys(activeRows[0]) : [];
+  const filterColumns = getPreviewFilterColumns(allColumns);
+  const filteredRows = useMemo(() => filterTableRows(activeRows, query, filters), [activeRows, query, filters]);
+  const displayColumns = getPreviewDisplayColumns(active.label, filteredRows.length ? Object.keys(filteredRows[0]) : allColumns);
+  const previewMeta = getPreviewSheetMeta(active.label, displayColumns.length, filteredRows.length);
+
+  const allPages = useMemo(
+    () => buildAllPreviewPages(active, filteredRows, displayColumns, previewMeta, pageSettings),
+    [active, filteredRows, displayColumns, previewMeta, pageSettings],
+  );
+
+  const totalPages = allPages.length;
+  const safeIndex = Math.min(currentPageIndex, Math.max(0, totalPages - 1));
+  const currentPage = allPages[safeIndex] || null;
+  const currentSettings = currentPage?.settings || { orientation: "portrait", fontSize: 10, rowHeight: 18, zoom: 92 };
+  const currentPrintKey = currentPage ? getPreviewPrintKey(active.key, currentPage.sheetKey) : "";
+
+  const savePageSettings = (newSettings) => {
+    if (!currentPage) return;
+    const next = { ...pageSettings, [currentPrintKey]: newSettings };
+    setPageSettings(next);
+    localStorage.setItem("preview-print-settings", JSON.stringify(next));
+  };
+
+  const patchSettings = (patch) => savePageSettings({ ...currentSettings, ...patch });
+
+  const applyToAll = () => {
+    if (!currentPage) return;
+    const next = { ...pageSettings };
+    const seen = new Set();
+    for (const page of allPages) {
+      if (seen.has(page.sheetKey)) continue;
+      seen.add(page.sheetKey);
+      next[getPreviewPrintKey(active.key, page.sheetKey)] = currentSettings;
+    }
+    setPageSettings(next);
+    localStorage.setItem("preview-print-settings", JSON.stringify(next));
+  };
+
+  const fitToOnePage = () => {
+    if (!currentPage) return;
+    savePageSettings(getOnePagePreviewSettings(active.label, displayColumns, currentPage.sheetRows, Boolean(currentPage.note)));
+  };
+
+  const fitA4 = () => {
+    if (!currentPage) return;
+    savePageSettings(getA4PreviewSettings(active.label, displayColumns, currentPage.sheetRows));
+  };
+
+  const resetToAuto = () => {
+    if (!currentPage) return;
+    const next = { ...pageSettings };
+    delete next[currentPrintKey];
+    setPageSettings(next);
+    localStorage.setItem("preview-print-settings", JSON.stringify(next));
+  };
+
+  const navTo = (index) => setCurrentPageIndex(Math.max(0, Math.min(totalPages - 1, index)));
+  const isPortrait = currentSettings.orientation === "portrait";
+  const rowsPerPage = currentPage ? getRowsPerPreviewPage(active.label, currentSettings, Boolean(currentPage.note)) : 30;
+  const fitStatus = currentPage ? getPageFitStatus(currentPage.totalChunks, currentPage.sheetRows.length, rowsPerPage) : null;
+
   return (
-    <div
-      className={`preview-panel ${expanded ? "excel-mode" : ""}`}
-      style={{
-        "--preview-font-size": `${printSettings.fontSize}px`,
-        "--preview-row-height": `${printSettings.rowHeight}px`,
-        "--preview-zoom": printSettings.zoom / 100,
-      }}
-    >
-      <div className="preview-sheet-meta">
-        <div>
-          <strong>{active.label}</strong>
-          <small>这里是打印调整台；搜索只定位纸张，不改变真实分页。</small>
-        </div>
-        <span>{filteredRows.length}/{activeRows.length} 行</span>
-      </div>
-      <div className="paper-workbench-toolbar">
-        <div className="paper-toolbar-group paper-select-group">
-          <span>选纸</span>
-          <label className="table-filter sheet-picker">
-            <select value={active.key} onChange={(event) => { setSheetQuery(""); setSelectedPaperKey(""); onChange(event.target.value); }}>
-              {sheetOptions.map((item) => <option key={item.key} value={item.key}>{item.label}</option>)}
-            </select>
-          </label>
-          <label className="table-search sheet-jump">
-            <Search size={15} />
-            <input value={sheetQuery} placeholder="搜班级/科目/考场" onChange={(event) => { setSheetQuery(event.target.value); setSelectedPaperKey(""); setShowAllSheets(true); }} />
-          </label>
-          {allPaperPages.length > 1 && (
-            <label className="table-filter sheet-picker">
-              <select value={selectedPaperKey} onChange={(event) => setSelectedPaperKey(event.target.value)}>
-                <option value="">{showAllSheets ? `全部铺开（${paperPageOptions.length} 张）` : currentSheetTitle || `匹配 ${paperPageOptions.length} 张纸`}</option>
-                {paperPageOptions.map((page) => <option key={page.key} value={page.key}>{page.title}</option>)}
-              </select>
-            </label>
-          )}
-        </div>
-        <div className="paper-toolbar-group">
-          <span>查人</span>
+    <div className={`preview-panel ${expanded ? "excel-mode" : ""}`}>
+      {/* 顶栏：切表 + 翻页 + 状态 + 查人 */}
+      <div className="preview-topbar">
+        <label className="table-filter">
+          <select value={active.key} onChange={(e) => onChange(e.target.value)}>
+            {tabs.map((t) => <option key={t.key} value={t.key}>{t.label}</option>)}
+          </select>
+        </label>
+
+        {totalPages > 1 && (
+          <div className="preview-page-nav">
+            <button type="button" className="icon-button" onClick={() => navTo(safeIndex - 1)} disabled={safeIndex === 0}>◀</button>
+            <span className="preview-page-counter">{safeIndex + 1}<em>/{totalPages}</em></span>
+            <button type="button" className="icon-button" onClick={() => navTo(safeIndex + 1)} disabled={safeIndex >= totalPages - 1}>▶</button>
+            {totalPages > 3 && (
+              <label className="table-filter">
+                <select value={safeIndex} onChange={(e) => navTo(Number(e.target.value))}>
+                  {allPages.map((page, i) => (
+                    <option key={page.key} value={i}>
+                      {page.title}{page.totalChunks > 1 ? ` (${page.pageNumber}/${page.totalChunks})` : ""}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
+          </div>
+        )}
+
+        {fitStatus && (
+          <span className={`preview-fit-badge preview-fit-${fitStatus.status}`}>{fitStatus.label}</span>
+        )}
+
+        <div className="preview-search-row">
           <label className="table-search">
-            <Search size={15} />
-            <input value={query} placeholder="姓名/考号/班级/考场" onChange={(event) => { setQuery(event.target.value); if (splitSheetPreview) setSelectedPaperKey(""); }} />
+            <Search size={14} />
+            <input value={query} placeholder="查人/考场/班级" onChange={(e) => setQuery(e.target.value)} />
           </label>
-          {filterColumns.map((column) => (
-            <label className="table-filter" key={column}>
-              <Filter size={14} />
-              <select
-                value={filters[column] || ""}
-                onChange={(event) => setFilters((current) => ({ ...current, [column]: event.target.value }))}
-              >
-                <option value="">{column}</option>
-                {uniqueValues(activeRows.map((row) => row[column])).map((item) => <option key={item} value={item}>{item}</option>)}
+          {filterColumns.map((col) => (
+            <label key={col} className="table-filter">
+              <Filter size={13} />
+              <select value={filters[col] || ""} onChange={(e) => setFilters((f) => ({ ...f, [col]: e.target.value }))}>
+                <option value="">{col}</option>
+                {uniqueValues(activeRows.map((r) => r[col])).map((v) => <option key={v} value={v}>{v}</option>)}
               </select>
             </label>
           ))}
+          {(query || Object.values(filters).some(Boolean)) && (
+            <button type="button" className="link-button" onClick={() => { setQuery(""); setFilters({}); }}>清空</button>
+          )}
         </div>
-        <div className="paper-toolbar-group print-control-group">
-          <span>调纸</span>
-          <button type="button" onClick={applyA4Fit}>适配 A4</button>
-          <button type="button" className="soft-button" onClick={applyOnePageFit}>压成一页</button>
-          <label className="table-filter compact-control">
-            方向
-            <select value={printSettings.orientation} onChange={(event) => updatePrintPatch({ orientation: event.target.value })}>
-              <option value="landscape">横向</option>
-              <option value="portrait">纵向</option>
-            </select>
-          </label>
-          <button type="button" className="soft-button" onClick={applyA4Fit}>
-            推荐{recommendedPrintSettings.orientation === "portrait" ? "竖向" : "横向"}
-          </button>
-          <PreviewStepper label="字号" value={printSettings.fontSize} min={8} max={28} step={1} onDecrease={() => stepPrintSetting("fontSize", -1, 8, 28)} onIncrease={() => stepPrintSetting("fontSize", 1, 8, 28)} onChange={(value) => updatePrintSetting("fontSize", value, 8, 28)} />
-          <PreviewStepper label="行高" value={printSettings.rowHeight} min={8} max={72} step={1} onDecrease={() => stepPrintSetting("rowHeight", -1, 8, 72)} onIncrease={() => stepPrintSetting("rowHeight", 1, 8, 72)} onChange={(value) => updatePrintSetting("rowHeight", value, 8, 72)} />
-          <PreviewStepper label="缩放" value={printSettings.zoom} min={55} max={120} suffix="%" onDecrease={() => stepPrintSetting("zoom", -5, 55, 120)} onIncrease={() => stepPrintSetting("zoom", 5, 55, 120)} onChange={(value) => updatePrintSetting("zoom", value, 55, 120)} />
-          <button type="button" className="icon-button" onClick={() => setExpanded((value) => !value)} title={expanded ? "退出 Excel 预览" : "打开 Excel 预览"}>
-            {expanded ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
-          </button>
+
+        <span className="muted preview-row-count">{filteredRows.length}/{activeRows.length} 行</span>
+
+        <button type="button" className="icon-button" onClick={() => setExpanded((v) => !v)} title={expanded ? "退出全屏" : "全屏预览"}>
+          {expanded ? <Minimize2 size={16} /> : <Maximize2 size={16} />}
+        </button>
+      </div>
+
+      {/* 调纸工具栏 */}
+      <div className="preview-print-toolbar">
+        <div className="print-orient-group">
+          <button type="button" className={isPortrait ? "active" : ""} onClick={() => patchSettings({ orientation: "portrait" })}>竖向</button>
+          <button type="button" className={!isPortrait ? "active" : ""} onClick={() => patchSettings({ orientation: "landscape" })}>横向</button>
         </div>
-        {splitSheetPreview && allPaperPages.length > 1 && (
-          <button type="button" className="paper-toggle-button" onClick={() => { setSelectedPaperKey(""); setShowAllSheets((value) => !value); }}>
-            {showAllSheets ? "只看当前纸" : `展开全部 ${paperPageOptions.length} 张`}
-          </button>
-        )}
+        <PreviewStepper label="字号" value={currentSettings.fontSize} min={7} max={18}
+          onDecrease={() => patchSettings({ fontSize: Math.max(7, currentSettings.fontSize - 1) })}
+          onIncrease={() => patchSettings({ fontSize: Math.min(18, currentSettings.fontSize + 1) })}
+          onChange={(v) => patchSettings({ fontSize: clampNumber(v, 7, 18, currentSettings.fontSize) })}
+        />
+        <PreviewStepper label="行高" value={currentSettings.rowHeight} min={10} max={60}
+          onDecrease={() => patchSettings({ rowHeight: Math.max(10, currentSettings.rowHeight - 1) })}
+          onIncrease={() => patchSettings({ rowHeight: Math.min(60, currentSettings.rowHeight + 1) })}
+          onChange={(v) => patchSettings({ rowHeight: clampNumber(v, 10, 60, currentSettings.rowHeight) })}
+        />
+        <PreviewStepper label="缩放" value={currentSettings.zoom} min={55} max={120} suffix="%"
+          onDecrease={() => patchSettings({ zoom: Math.max(55, currentSettings.zoom - 5) })}
+          onIncrease={() => patchSettings({ zoom: Math.min(120, currentSettings.zoom + 5) })}
+          onChange={(v) => patchSettings({ zoom: clampNumber(v, 55, 120, currentSettings.zoom) })}
+        />
+        <div className="print-action-group">
+          <button type="button" onClick={fitToOnePage} className="soft-button">压成一页</button>
+          <button type="button" onClick={fitA4}>适配 A4</button>
+          {totalPages > 1 && (
+            <button type="button" onClick={applyToAll} className="soft-button">应用到全部</button>
+          )}
+          <button type="button" onClick={resetToAuto} className="link-button">重置</button>
+          <button type="button" className="link-button" onClick={() => window.print()}>打印</button>
+        </div>
       </div>
-      <div className="preview-note">
-        {active.label}：当前在看 {currentSheetTitle || active.label}。
-        {splitSheetPreview && !showAllSheets && !selectedPaperKey && currentSheetTitle && <span className="preview-current-sheet">当前 sheet：{currentSheetTitle}</span>}
-        {currentPaperPage && <span className="preview-current-sheet">当前设置作用于：{currentSheetTitle || "当前页"} · {printSettings.orientation === "portrait" ? "竖向" : "横向"}</span>}
-        {filteredRows.length > 80 && (
-          <button type="button" className="link-button" onClick={() => setShowAll(!showAll)}>
-            {showAll ? "收起到前80行" : "显示全部"}
-          </button>
-        )}
-        {(query || Object.values(filters).some(Boolean)) && (
-          <button type="button" className="link-button" onClick={() => { setQuery(""); setFilters({}); }}>清空筛选</button>
-        )}
-        <button type="button" className="link-button" onClick={() => window.print()}>打印当前预览</button>
-      </div>
-      <div className={`excel-canvas ${printSettings.orientation}`}>
+
+      {/* 纸张预览 */}
+      <div className={`excel-canvas ${currentSettings.orientation}`}>
         <div className="excel-ribbon">
-          <span>{active.label}</span>
-          <small>A4 {printSettings.orientation === "landscape" ? "横向" : "纵向"} · {printSettings.fontSize}px · 行高 {printSettings.rowHeight}px · {printSettings.zoom}% · {visiblePaperPages.length}/{allPaperPages.length} 页</small>
+          <span>{currentPage?.title || active.label}</span>
+          <small>
+            {isPortrait ? "竖向" : "横向"} · 字 {currentSettings.fontSize} · 行高 {currentSettings.rowHeight} · {currentSettings.zoom}%
+            {fitStatus && <> · <span className={`ribbon-fit-${fitStatus.status}`}>{fitStatus.label}</span></>}
+          </small>
         </div>
         <div className="excel-pages">
-          {visiblePaperPages.length === 0 && (
-            <div className={`excel-page ${printSettings.orientation}`}>
-              <div className="preview-empty-sheet">没有匹配到 sheet，换个班级、科目或考场号试试。</div>
+          {currentPage ? (
+            <div
+              className={`excel-page ${currentSettings.orientation}`}
+              key={currentPage.key}
+              style={{
+                "--preview-font-size": `${currentSettings.fontSize}px`,
+                "--preview-row-height": `${currentSettings.rowHeight}px`,
+                "--preview-zoom": currentSettings.zoom / 100,
+              }}
+              onDoubleClick={() => setExpanded(true)}
+            >
+              <div className="preview-print-title">{currentPage.title}</div>
+              {currentPage.note && <div className="preview-print-note">{currentPage.note}</div>}
+              <div className={`table-wrap preview-table ${expanded ? "expanded" : ""}`}>
+                <table>
+                  <thead>
+                    <tr>{displayColumns.map((col) => <th key={col}>{col}</th>)}</tr>
+                  </thead>
+                  <tbody>
+                    {currentPage.rows.map((row, i) => (
+                      <tr key={row.考号 ? `${row.考号}-${i}` : i}>
+                        {displayColumns.map((col) => (
+                          <td key={col} className={row.__selfStudy || row[`__selfStudy:${col}`] ? "preview-self-study" : ""}>{row[col]}</td>
+                        ))}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <div className="preview-page-footer">
+                {currentPage.title} · 第 {currentPage.pageNumber}/{currentPage.totalChunks} 页 · 共 {currentPage.sheetRows.length} 行
+              </div>
+            </div>
+          ) : (
+            <div className="excel-page portrait">
+              <div className="preview-empty-sheet">暂无数据</div>
             </div>
           )}
-          {visiblePaperPages.map((page) => {
-            const pageSettings = getPagePrintSettings(active.key, page, page.printSettings || getA4PreviewSettings(active?.label, displayColumns, page.sheetRows || page.rows), sheetPrintSettings);
-            return (
-              <div
-                className={`excel-page ${pageSettings.orientation}`}
-                key={page.key}
-                onDoubleClick={() => setExpanded(true)}
-                style={{
-                  "--preview-font-size": `${pageSettings.fontSize}px`,
-                  "--preview-row-height": `${pageSettings.rowHeight}px`,
-                  "--preview-zoom": pageSettings.zoom / 100,
-                }}
-              >
-                <div className="preview-print-title">{page.title}</div>
-                {page.note && <div className="preview-print-note">{page.note}</div>}
-                <div className={`table-wrap preview-table ${expanded ? "expanded" : ""}`}>
-                  <table>
-                    <thead>
-                      <tr>{displayColumns.map((column) => <th key={column}>{column}</th>)}</tr>
-                    </thead>
-                    <tbody>
-                      {page.rows.map((row, index) => (
-                        <tr key={row.考号 ? `${row.考号}-${index}` : index}>
-                          {displayColumns.map((column) => <td className={row.__selfStudy || row[`__selfStudy:${column}`] ? "preview-self-study" : ""} key={column}>{row[column]}</td>)}
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-                <div className="preview-page-footer">第 {page.pageNumber} / {allPaperPages.length} 页</div>
-              </div>
-            );
-          })}
         </div>
       </div>
     </div>
@@ -2494,6 +2510,60 @@ function chunkRows(rows, size) {
   return chunks;
 }
 
+function buildAllPreviewPages(active, filteredRows, displayColumns, previewMeta, pageSettings) {
+  const label = active?.label || "";
+  const tabKey = active?.key || "__none__";
+  const grouped = groupRowsForPreviewPages(label, filteredRows);
+  const pages = [];
+  for (const group of grouped) {
+    const printKey = getPreviewPrintKey(tabKey, group.key);
+    const savedSettings = pageSettings[printKey];
+    const autoSettings = getA4PreviewSettings(label, displayColumns, group.rows);
+    const settings = savedSettings || autoSettings;
+    const hasNote = Boolean(group.note || previewMeta.note);
+    const rowsPerPage = getRowsPerPreviewPage(label, settings, hasNote);
+    const chunks = chunkRows(group.rows, rowsPerPage);
+    const totalChunks = Math.max(1, chunks.length);
+    (chunks.length ? chunks : [[]]).forEach((chunk, chunkIndex) => {
+      pages.push({
+        key: `${group.key}-${chunkIndex}`,
+        sheetKey: group.key,
+        title: group.title || previewMeta.title,
+        note: group.note || previewMeta.note || "",
+        rows: chunk,
+        sheetRows: group.rows,
+        settings,
+        pageNumber: chunkIndex + 1,
+        totalChunks,
+        columns: displayColumns,
+      });
+    });
+  }
+  return pages.length
+    ? pages
+    : [{
+        key: "empty",
+        sheetKey: "empty",
+        title: previewMeta.title,
+        note: previewMeta.note || "",
+        rows: [],
+        sheetRows: [],
+        settings: { orientation: "portrait", fontSize: 10, rowHeight: 18, zoom: 92 },
+        pageNumber: 1,
+        totalChunks: 1,
+        columns: displayColumns,
+      }];
+}
+
+function getPageFitStatus(totalChunks, rowCount, rowsPerPage) {
+  if (totalChunks <= 1) {
+    const fillRatio = rowCount / Math.max(1, rowsPerPage);
+    if (fillRatio > 0.9) return { status: "tight", label: "偏紧" };
+    return { status: "fit", label: "适配" };
+  }
+  return { status: "over", label: `${totalChunks} 页` };
+}
+
 function getA4PreviewSettings(label, columns = [], rows = []) {
   const isRoom = String(label || "").includes("考场信息");
   const isClass = String(label || "").includes("班主任");
@@ -2549,10 +2619,17 @@ function estimateOnePageNeed(label, orientation, columns, rows, hasNote) {
 function estimatePreviewPageFit(label, columns, rows) {
   const paper = String(label || "");
   const portrait = estimatePaperNeed(paper, "portrait", columns, rows);
-  const landscape = estimatePaperNeed(paper, "landscape", columns, rows);
   if (portrait.widthFit) return portrait;
-  if (landscape.widthFit) return landscape;
-  return portrait.score <= landscape.score ? portrait : landscape;
+  // 内容比竖向更宽：保持竖向，缩小 zoom/字号使其适配显示
+  const widthNeeded = estimatePreviewWidth(paper, columns, rows, "portrait");
+  const usableWidth = 515;
+  const scale = Math.max(0.68, Math.min(1, usableWidth / Math.max(1, widthNeeded)));
+  return {
+    orientation: "portrait",
+    fontSize: Math.max(8, Math.round(portrait.fontSize * scale)),
+    rowHeight: Math.max(13, Math.round(portrait.rowHeight * scale)),
+    zoom: Math.max(65, Math.round(portrait.zoom * scale)),
+  };
 }
 
 function estimatePaperNeed(label, orientation, columns, rows) {
