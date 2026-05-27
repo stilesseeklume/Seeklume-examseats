@@ -767,7 +767,7 @@ function App() {
     <main className="app-shell">
       <header className="topbar">
         <div className="topbar-brand">
-          <a href="https://home.seeklume.work/" style={{ color: "inherit", textDecoration: "none" }}>
+          <a href="https://seeklume.work/" style={{ color: "inherit", textDecoration: "none" }}>
             <span className="brand-logo">Seeklume ExamSeats</span>
           </a>
         </div>
