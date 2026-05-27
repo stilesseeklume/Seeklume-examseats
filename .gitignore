@@ -13,6 +13,7 @@ exports/
 fixtures/private/
 
 # Local environment
+.claude/
 .env
 .env.*
 !.env.example

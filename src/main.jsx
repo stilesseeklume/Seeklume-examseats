@@ -2281,7 +2281,11 @@ function PreviewPanel({ tabs, activeKey, onChange }) {
                 </table>
               </div>
               <div className="preview-page-footer">
-                {currentPage.title} · 第 {currentPage.pageNumber}/{currentPage.totalChunks} 页 · 共 {currentPage.sheetRows.length} 行
+                {currentPage.groupRowCount > 0 && <span>共 {currentPage.groupRowCount} 人</span>}
+                {currentPage.groupPageCount > 1
+                  ? <span className="preview-page-warn">本组第 {currentPage.groupPageIndex} / {currentPage.groupPageCount} 页 · 建议双面打印</span>
+                  : <span>1 张 A4 铺开</span>}
+                <span>总第 {safeIndex + 1} / {totalPages} 页</span>
               </div>
             </div>
           ) : (
@@ -2536,6 +2540,9 @@ function buildAllPreviewPages(active, filteredRows, displayColumns, previewMeta,
         pageNumber: chunkIndex + 1,
         totalChunks,
         columns: displayColumns,
+        groupRowCount: group.rows.length,
+        groupPageCount: totalChunks,
+        groupPageIndex: chunkIndex + 1,
       });
     });
   }
@@ -2552,6 +2559,9 @@ function buildAllPreviewPages(active, filteredRows, displayColumns, previewMeta,
         pageNumber: 1,
         totalChunks: 1,
         columns: displayColumns,
+        groupRowCount: 0,
+        groupPageCount: 1,
+        groupPageIndex: 1,
       }];
 }
 
@@ -2565,12 +2575,7 @@ function getPageFitStatus(totalChunks, rowCount, rowsPerPage) {
 }
 
 function getA4PreviewSettings(label, columns = [], rows = []) {
-  const isRoom = String(label || "").includes("考场信息");
-  const isClass = String(label || "").includes("班主任");
-  const isTime = String(label || "").includes("考试时间");
-  const isDoor = String(label || "").includes("门牌");
-  const estimated = estimatePreviewPageFit(label, columns, rows);
-  if (isTime) {
+  if (String(label || "").includes("考试时间")) {
     return {
       orientation: "portrait",
       fontSize: 18,
@@ -2578,88 +2583,84 @@ function getA4PreviewSettings(label, columns = [], rows = []) {
       zoom: 100,
     };
   }
-  return {
-    orientation: estimated.orientation,
-    fontSize: estimated.fontSize,
-    rowHeight: estimated.rowHeight,
-    zoom: estimated.zoom,
-  };
+  return autoFitOnePage(label, columns, rows);
 }
 
 function getOnePagePreviewSettings(label, columns = [], rows = [], hasNote = false) {
-  const portrait = estimateOnePageNeed(label, "portrait", columns, rows, hasNote);
-  const landscape = estimateOnePageNeed(label, "landscape", columns, rows, hasNote);
-  if (portrait.widthFit && portrait.rowHeight >= 8) return portrait;
-  if (landscape.widthFit && landscape.rowHeight >= 8) return landscape;
-  return portrait.score <= landscape.score ? portrait : landscape;
+  const auto = autoFitOnePage(label, columns, rows);
+  if (fitsOnePage(label, columns, rows, auto.orientation, auto, hasNote)) return auto;
+  const rowCount = Math.max(1, rows.length);
+  const usablePortrait = getUsablePageDimensions("portrait", hasNote);
+  const usableLandscape = getUsablePageDimensions("landscape", hasNote);
+  const portraitRowHeight = Math.max(8, Math.floor(usablePortrait.height / rowCount));
+  const landscapeRowHeight = Math.max(8, Math.floor(usableLandscape.height / rowCount));
+  if (portraitRowHeight >= landscapeRowHeight) {
+    return {
+      orientation: "portrait",
+      rowHeight: portraitRowHeight,
+      fontSize: clampNumber(portraitRowHeight - 4, 7, 12, 9),
+      zoom: 96,
+    };
+  }
+  return {
+    orientation: "landscape",
+    rowHeight: landscapeRowHeight,
+    fontSize: clampNumber(landscapeRowHeight - 4, 7, 12, 9),
+    zoom: 88,
+  };
 }
 
-function estimateOnePageNeed(label, orientation, columns, rows, hasNote) {
-  const rowCount = Math.max(1, rows.length);
-  const pageHeight = orientation === "landscape" ? 794 : 1123;
+function autoFitOnePage(label, columns, rows) {
+  const portraitTiers = [
+    { fontSize: 12, rowHeight: 26, zoom: 96 },
+    { fontSize: 11, rowHeight: 22, zoom: 96 },
+    { fontSize: 10, rowHeight: 18, zoom: 96 },
+    { fontSize: 9, rowHeight: 15, zoom: 96 },
+  ];
+  for (const tier of portraitTiers) {
+    if (fitsOnePage(label, columns, rows, "portrait", tier, true)) {
+      return { orientation: "portrait", ...tier };
+    }
+  }
+  const landscapeTiers = [
+    { fontSize: 11, rowHeight: 22, zoom: 88 },
+    { fontSize: 10, rowHeight: 18, zoom: 88 },
+    { fontSize: 9, rowHeight: 15, zoom: 88 },
+  ];
+  for (const tier of landscapeTiers) {
+    if (fitsOnePage(label, columns, rows, "landscape", tier, true)) {
+      return { orientation: "landscape", ...tier };
+    }
+  }
+  return { orientation: "portrait", fontSize: 9, rowHeight: 15, zoom: 96 };
+}
+
+function fitsOnePage(label, columns, rows, orientation, settings, hasNote = true) {
+  const usable = getUsablePageDimensions(orientation, hasNote);
+  const widthNeeded = estimatePreviewWidth(label, columns, rows, orientation, settings.fontSize);
+  const heightNeeded = (rows.length || 1) * settings.rowHeight;
+  return widthNeeded <= usable.width && heightNeeded <= usable.height;
+}
+
+function getUsablePageDimensions(orientation, hasNote = true) {
+  const pageWidth = orientation === "portrait" ? 595 : 842;
+  const pageHeight = orientation === "portrait" ? 1123 : 794;
+  const horizontalMargin = 40;
   const verticalPadding = 60;
   const titleHeight = 34;
   const noteHeight = hasNote ? 26 : 0;
   const headerHeight = 24;
   const footerHeight = 24;
-  const availableHeight = pageHeight - verticalPadding - titleHeight - noteHeight - headerHeight - footerHeight;
-  const rowHeight = clampNumber(Math.floor(availableHeight / rowCount), 8, 22, 14);
-  const fontSize = clampNumber(rowHeight - 4, 8, 11, 9);
-  const widthNeed = estimatePaperNeed(label, orientation, columns, rows);
   return {
-    orientation,
-    fontSize,
-    rowHeight,
-    zoom: orientation === "portrait" ? 96 : 88,
-    widthFit: widthNeed.widthFit,
-    score: Math.max(widthNeed.score, rowHeight <= 8 ? 1.15 : 0.85),
+    width: pageWidth - horizontalMargin * 2,
+    height: pageHeight - verticalPadding - titleHeight - noteHeight - headerHeight - footerHeight,
   };
 }
 
-function estimatePreviewPageFit(label, columns, rows) {
-  const paper = String(label || "");
-  const portrait = estimatePaperNeed(paper, "portrait", columns, rows);
-  if (portrait.widthFit) return portrait;
-  // 内容比竖向更宽：保持竖向，缩小 zoom/字号使其适配显示
-  const widthNeeded = estimatePreviewWidth(paper, columns, rows, "portrait");
-  const usableWidth = 515;
-  const scale = Math.max(0.68, Math.min(1, usableWidth / Math.max(1, widthNeeded)));
-  return {
-    orientation: "portrait",
-    fontSize: Math.max(8, Math.round(portrait.fontSize * scale)),
-    rowHeight: Math.max(13, Math.round(portrait.rowHeight * scale)),
-    zoom: Math.max(65, Math.round(portrait.zoom * scale)),
-  };
-}
-
-function estimatePaperNeed(label, orientation, columns, rows) {
-  const columnCount = columns.length;
-  const rowCount = rows.length;
-  const pageWidth = orientation === "portrait" ? 595 : 842;
-  const pageHeight = orientation === "portrait" ? 842 : 595;
-  const margins = 40;
-  const usableWidth = pageWidth - margins * 2;
-  const usableHeight = pageHeight - margins * 2;
-  const titleHeight = String(label || "").includes("考试时间") ? 72 : 46;
-  const noteHeight = String(label || "").includes("校验") ? 22 : 18;
-  const headerHeight = 26;
-  const rowHeight = guessPreviewRowHeight(label, rowCount, orientation);
-  const widthNeeded = estimatePreviewWidth(label, columns, rows, orientation);
-  const heightNeeded = titleHeight + noteHeight + headerHeight + rowHeight * Math.max(1, rowCount);
-  return {
-    orientation,
-    widthFit: widthNeeded <= usableWidth,
-    heightFit: heightNeeded <= usableHeight,
-    score: Math.max(widthNeeded / usableWidth, heightNeeded / usableHeight),
-    fontSize: orientation === "portrait" ? (columnCount > 8 ? 9 : 10) : (columnCount > 10 ? 9 : 10),
-    rowHeight: orientation === "portrait" ? (rowCount > 40 ? 15 : 18) : (rowCount > 34 ? 14 : 17),
-    zoom: orientation === "portrait" ? (columnCount > 8 ? 92 : 96) : (columnCount > 10 ? 84 : 88),
-  };
-}
-
-function estimatePreviewWidth(label, columns = [], rows = [], orientation) {
+function estimatePreviewWidth(label, columns = [], rows = [], orientation, fontSize = 11) {
   const textHeavy = String(label || "").includes("班主任") || String(label || "").includes("考场信息");
-  const perChar = orientation === "portrait" ? 7.2 : 7.0;
+  const baseCharWidth = orientation === "portrait" ? 7.2 : 7.0;
+  const perChar = baseCharWidth * (Math.max(8, fontSize) / 11);
   const padding = orientation === "portrait" ? 20 : 18;
   const columnPadding = orientation === "portrait" ? 8 : 6;
   let total = 0;
@@ -2691,13 +2692,6 @@ function getColumnWeight(column, textHeavy) {
   if (label.includes("总分")) return 7;
   if (textHeavy) return 9;
   return 8;
-}
-
-function guessPreviewRowHeight(label, rowCount, orientation) {
-  if (String(label || "").includes("考试时间")) return orientation === "portrait" ? 26 : 24;
-  if (String(label || "").includes("班主任")) return rowCount > 45 ? 14 : 15;
-  if (String(label || "").includes("考场信息")) return rowCount > 42 ? 14 : 15;
-  return rowCount > 50 ? 14 : 16;
 }
 
 function getPreviewFilterColumns(columns) {
